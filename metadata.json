@@ -1,0 +1,8 @@
+{
+  "name": "Club Navalha App",
+  "description": "Sistema completo de gestão de fila, agendamento e faturamento para barbearias premium com PWA e notificações simuladas.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}

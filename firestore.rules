@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn();
+    }
+
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && request.auth.uid == adminId;
+    }
+
+    match /barbers/{barberId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /bookings/{bookingId} {
+      allow read, list: if true;
+      allow create: if 
+        request.resource.data.status == 'waiting' &&
+        request.resource.data.clientName is string &&
+        request.resource.data.clientWhatsapp is string;
+      
+      allow update: if 
+        isAdmin() || 
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime'])
+        );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /breaks/{breakId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /clients/{whatsapp} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

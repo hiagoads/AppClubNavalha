@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "Barber": {
+      "title": "Barber",
+      "description": "Information about a barber in the shop",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Barber's name" },
+        "photoUrl": { "type": "string", "description": "URL to barber's photo" },
+        "isActive": { "type": "boolean", "description": "Whether the barber is currently working" },
+        "specialties": { "type": "array", "description": "List of service IDs this barber performs" }
+      },
+      "required": ["name", "isActive"]
+    },
+    "Service": {
+      "title": "Service",
+      "description": "Haircut or other service offered",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the service" },
+        "duration": { "type": "number", "description": "Duration in minutes" },
+        "price": { "type": "number", "description": "Regular price" },
+        "promoPrice": { "type": "number", "description": "Promotion price if applicable" },
+        "isActive": { "type": "boolean", "description": "Whether the service is available" }
+      },
+      "required": ["name", "duration", "price"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "A queue entry or appointment",
+      "type": "object",
+      "properties": {
+        "clientName": { "type": "string" },
+        "clientWhatsapp": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "barberId": { "type": "string", "description": "Selected barber ID or 'any'" },
+        "type": { "type": "string", "enum": ["walk-in", "scheduled"] },
+        "scheduledTime": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["waiting", "checking-in", "in-service", "completed", "missed"] },
+        "checkInTime": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "serviceStartTime": { "type": "string", "format": "date-time" },
+        "estimatedEndTime": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientName", "clientWhatsapp", "serviceId", "type", "status"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Recurring client record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "totalSpent": { "type": "number" },
+        "cutsCount": { "type": "number" },
+        "lastVisit": { "type": "string", "format": "date-time" }
+      },
+      "required": ["whatsapp", "name"]
+    }
+  },
+  "firestore": {
+    "/barbers": {
+      "schema": "Barber",
+      "description": "Collection of barbers"
+    },
+    "/services": {
+      "schema": "Service",
+      "description": "Collection of services"
+    },
+    "/bookings": {
+      "schema": "Booking",
+      "description": "Collection of active and past bookings"
+    },
+    "/clients": {
+      "schema": "Client",
+      "description": "Collection of clients"
+    }
+  }
+}

@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      // In this app, we'll check if the user is in an 'admins' collection
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && request.auth.uid == adminId;
+      allow write: if false; // Admins must be added via console or special script
+    }
+
+    match /barbers/{barberId} {
+      allow read: if true; // Everyone can see barbers
+      allow write: if isAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if true; // Everyone can see services
+      allow write: if isAdmin();
+    }
+
+    match /bookings/{bookingId} {
+      // Clients can see the queue
+      allow list: if true; 
+      // Clients can see their own booking if they have the ID (or we filter by whatsapp in a secure way)
+      allow get: if true; 
+
+      allow create: if 
+        request.resource.data.status == 'waiting' &&
+        request.resource.data.clientName is string &&
+        request.resource.data.clientName.size() > 0 &&
+        request.resource.data.clientWhatsapp is string &&
+        request.resource.data.clientWhatsapp.matches('^[0-9]+$');
+      
+      allow update: if 
+        isAdmin() || 
+        (
+          // Client checking in
+          request.resource.data.status == 'checking-in' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime'])
+        );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /clients/{whatsapp} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+    
+    match /revenue/{recordId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
