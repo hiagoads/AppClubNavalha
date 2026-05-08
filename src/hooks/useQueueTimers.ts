@@ -56,12 +56,17 @@ export function useQueueTimers(
   }
 
   // Dynamic sorting algorithm based on arrivalTime (scheduledTime)
-  const getMillis = (dateObj: any) => {
-     if (!dateObj) return Infinity;
-     if (typeof dateObj.toMillis === 'function') return dateObj.toMillis();
-     if (typeof dateObj === 'string') return new Date(dateObj).getTime();
-     if (typeof dateObj === 'number') return dateObj;
-     return Infinity;
+  const getMillis = (dateObj: any, booking?: any) => {
+     let time = Infinity;
+     if (dateObj) {
+        if (typeof dateObj.toMillis === 'function') time = dateObj.toMillis();
+        else if (typeof dateObj === 'string') time = new Date(dateObj).getTime();
+        else if (typeof dateObj === 'number') time = dateObj;
+     }
+     if (time !== Infinity && booking && booking.delayOffset) {
+        time += booking.delayOffset * 60000;
+     }
+     return time;
   };
 
   const getDuration = (b: Booking) => {
@@ -76,7 +81,7 @@ export function useQueueTimers(
     return d;
   };
 
-  const getSchedTime = (b: Booking) => {
+  const getSchedTime = (b: any) => {
     if (!b.scheduledTime) return Infinity;
     const [h, m] = b.scheduledTime.split(':').map(Number);
     const d = new Date(now);
@@ -85,7 +90,11 @@ export function useQueueTimers(
       d.setFullYear(year, month - 1, day);
     }
     d.setHours(h, m, 0, 0);
-    return d.getTime();
+    let time = d.getTime();
+    if (b.delayOffset) {
+      time += b.delayOffset * 60000;
+    }
+    return time;
   };
 
   let currentSimulationTime = now + (activeRemainingMinutes * 60000);
@@ -94,7 +103,7 @@ export function useQueueTimers(
   let remainingBreaks = [...breaks].sort((a,b) => a.startTime - b.startTime);
 
   const scheduled = queue.filter(q => q.type === 'scheduled').sort((a, b) => getSchedTime(a) - getSchedTime(b));
-  const walkins = queue.filter(q => q.type !== 'scheduled').sort((a, b) => getMillis(a.createdAt) - getMillis(b.createdAt));
+  const walkins = queue.filter(q => q.type !== 'scheduled').sort((a, b) => getMillis(a.createdAt, a) - getMillis(b.createdAt, b));
 
   let sortedQueue: Booking[] = [];
 
@@ -122,7 +131,7 @@ export function useQueueTimers(
       const schedTime = getSchedTime(nextSched);
       const walkinDuration = getDuration(nextWalkin);
       
-      const walkinStartTime = Math.max(currentSimulationTime, getMillis(nextWalkin.createdAt));
+      const walkinStartTime = Math.max(currentSimulationTime, getMillis(nextWalkin.createdAt, nextWalkin));
       const walkinEndTime = walkinStartTime + (walkinDuration * 60000);
       const margin = 10 * 60000;
       
@@ -148,7 +157,7 @@ export function useQueueTimers(
       const sTime = getSchedTime(picked);
       startTimeForWait = Math.max(currentSimulationTime, sTime);
     } else {
-      startTimeForWait = Math.max(currentSimulationTime, getMillis(picked.createdAt));
+      startTimeForWait = Math.max(currentSimulationTime, getMillis(picked.createdAt, picked));
     }
 
     const itemDuration = getDuration(picked) * 60000;

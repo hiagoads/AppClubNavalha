@@ -5,12 +5,13 @@ import { useQueueTimers } from '../hooks/useQueueTimers';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X } from 'lucide-react';
+import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2 } from 'lucide-react';
 import { BookingStatus, BookingType, Service } from '../types';
-import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
+import { formatTime, getDistanceFromLatLonInMeters } from '../utils';
 
 export default function ClientPanel() {
   const { queue, activeBooking, loading } = useQueue();
@@ -152,22 +153,109 @@ export default function ClientPanel() {
     }
   };
 
+  const [editingServices, setEditingServices] = useState<{id: string, services: string[]} | null>(null);
+
+  const handleUpdateServices = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingServices || editingServices.services.length === 0) {
+      toast.error('Selecione pelo menos um serviço');
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'bookings', editingServices.id), {
+        serviceId: editingServices.services.join(', ')
+      });
+      toast.success('Serviços atualizados com sucesso');
+      setEditingServices(null);
+    } catch (err) {
+      toast.error('Erro ao atualizar serviços');
+    }
+  };
+
   const handleCheckIn = async () => {
     if (!myBookingId) return;
+
+    if (!('geolocation' in navigator)) {
+      toast.error('Geolocalização não suportada pelo seu navegador.');
+      return;
+    }
+
+    toast.loading('Verificando localização...', { id: 'location-check' });
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        const barbershopLat = -7.403397098886646;
+        const barbershopLon = -35.10369207031895;
+
+        const distance = getDistanceFromLatLonInMeters(latitude, longitude, barbershopLat, barbershopLon);
+        
+        if (distance <= 50) {
+          try {
+            const bookingRef = doc(db, 'bookings', myBookingId);
+            await updateDoc(bookingRef, {
+              status: BookingStatus.CHECKING_IN,
+              checkInTime: new Date().toISOString()
+            });
+            toast.dismiss('location-check');
+            toast.success('Check-in realizado! Aguarde seu barbeiro.');
+          } catch (err) {
+            toast.dismiss('location-check');
+            toast.error('Erro ao fazer check-in');
+          }
+        } else {
+          toast.dismiss('location-check');
+          toast.error(`Você precisa estar na barbearia para marcar presença. (Distância atual: ${Math.round(distance)}m)`);
+        }
+      },
+      (error) => {
+        toast.dismiss('location-check');
+        if (error.code === error.PERMISSION_DENIED) {
+           toast.error('Você só pode marcar presença se permitir o compartilhamento de localização.');
+        } else {
+           toast.error('Não foi possível obter sua localização.');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  };
+
+  const handleUndoCheckIn = async () => {
+    if (!myBookingId) return;
     try {
-      // simulate location check
-      toast.loading('Verificando localização...');
-      setTimeout(async () => {
-        const bookingRef = doc(db, 'bookings', myBookingId);
-        await updateDoc(bookingRef, {
-          status: BookingStatus.CHECKING_IN,
-          checkInTime: new Date().toISOString()
-        });
-        toast.dismiss();
-        toast.success('Check-in realizado! Aguarde seu barbeiro.');
-      }, 1500);
-    } catch (err) {
-      toast.error('Erro ao fazer check-in');
+      await updateDoc(doc(db, 'bookings', myBookingId), {
+        status: BookingStatus.WAITING,
+        checkInTime: deleteField()
+      });
+      toast.success('Presença cancelada.');
+    } catch(err) {
+      toast.error('Erro ao cancelar presença');
+    }
+  };
+
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+
+  const handleWithdraw = async () => {
+    if (!myBookingId) return;
+    if (!confirmingCancel) {
+      setConfirmingCancel(true);
+      setTimeout(() => setConfirmingCancel(false), 3000);
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'bookings', myBookingId), {
+        status: BookingStatus.CANCELLED
+      });
+      localStorage.removeItem('myBookingId');
+      setMyBookingId(null);
+      setConfirmingCancel(false);
+      toast.success("Atendimento cancelado.");
+    } catch(err) {
+      toast.error("Erro ao cancelar o atendimento.");
     }
   };
 
@@ -254,25 +342,49 @@ export default function ClientPanel() {
                </div>
                <div className="mb-4">
                   <h3 className="text-xl font-bold">{myBooking.clientName}</h3>
+                  <div className="flex items-center gap-2 mt-1 mb-1">
+                    <p className="text-gold text-sm">{myBooking.serviceId}</p>
+                    {myBooking.status !== BookingStatus.IN_SERVICE && (
+                      <button onClick={() => setEditingServices({id: myBooking.id, services: myBooking.serviceId.split(', ')})} className="text-white/40 hover:text-white p-1">
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                   <p className="text-white/40 text-sm">{myBooking.status === BookingStatus.IN_SERVICE ? 'Você está sendo atendido!' : 'Aguardando sua vez'}</p>
                </div>
                
-               {myBooking.status === BookingStatus.WAITING && (
-                 <button 
-                   onClick={handleCheckIn}
-                   className="w-full bg-gold/10 hover:bg-gold/20 text-gold border border-gold/30 py-2 sm:py-3 rounded-xl font-bold flex items-center justify-center gap-2 text-xs sm:text-sm"
-                 >
-                   <Users className="w-4 h-4 shrink-0" />
-                   <span className="truncate">MARCAR PRESENÇA</span>
-                 </button>
-               )}
+               <div className="flex flex-col gap-2">
+                 {myBooking.status === BookingStatus.WAITING && (
+                   <button 
+                     onClick={handleCheckIn}
+                     className="w-full bg-gold/10 hover:bg-gold/20 text-gold border border-gold/30 py-2 sm:py-3 rounded-xl font-bold flex items-center justify-center gap-2 text-xs sm:text-sm transition-colors"
+                   >
+                     <Users className="w-4 h-4 shrink-0" />
+                     <span className="truncate">MARCAR PRESENÇA</span>
+                   </button>
+                 )}
 
-               {myBooking.status === BookingStatus.CHECKING_IN && (
-                 <div className="w-full bg-green-500/10 text-green-500 border border-green-500/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2">
-                   <CheckCircle2 className="w-4 h-4" />
-                   PRESENÇA CONFIRMADA
-                 </div>
-               )}
+                 {myBooking.status === BookingStatus.CHECKING_IN && (
+                   <button 
+                     onClick={handleUndoCheckIn}
+                     className="w-full bg-green-500/10 text-green-500 border border-green-500/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-colors group"
+                   >
+                     <CheckCircle2 className="w-4 h-4 group-hover:hidden" />
+                     <X className="w-4 h-4 hidden group-hover:block" />
+                     <span className="group-hover:hidden">PRESENÇA CONFIRMADA</span>
+                     <span className="hidden group-hover:block">CANCELAR PRESENÇA</span>
+                   </button>
+                 )}
+                 
+                 {myBooking.status !== BookingStatus.IN_SERVICE && (
+                   <button 
+                     onClick={handleWithdraw}
+                     className={`w-full ${confirmingCancel ? 'bg-red-500 font-bold text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 font-bold'} border border-red-500/30 py-2 rounded-xl flex items-center justify-center transition-colors text-xs`}
+                   >
+                     {confirmingCancel ? 'TEM CERTEZA? CLIQUE AQUI' : 'CANCELAR ATENDIMENTO'}
+                   </button>
+                 )}
+               </div>
             </div>
           </section>
         )}
@@ -296,7 +408,7 @@ export default function ClientPanel() {
                     <h3 className="font-display text-xl font-bold">{activeBooking.clientName}</h3>
                     <p className="text-white/40 text-sm flex items-center gap-1">
                       <Clock className="w-3 h-3" /> 
-                      {activeBooking.serviceStartTime ? `Restam aprox. ${activeRemainingMinutes} min` : "Iniciando..."}
+                      {activeBooking.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes)}` : "Iniciando..."}
                     </p>
                   </div>
                </div>
@@ -308,15 +420,17 @@ export default function ClientPanel() {
         <section>
           <div className="flex justify-between items-end mb-4 px-2">
             <h2 className="text-xs uppercase tracking-widest text-white/50 font-semibold">Em Fila ({sortedQueue?.length || 0})</h2>
-            <button 
-              onClick={() => {
-                setFormType('scheduled');
-                setShowJoinForm(true);
-              }}
-              className="text-gold text-sm font-bold flex items-center gap-1 hover:underline"
-            >
-              Agendar Horário <ChevronRight className="w-4 h-4" />
-            </button>
+            {!myBooking && (
+              <button 
+                onClick={() => {
+                  setFormType('scheduled');
+                  setShowJoinForm(true);
+                }}
+                className="text-gold text-sm font-bold flex items-center gap-1 hover:underline"
+              >
+                Agendar Horário <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -357,7 +471,7 @@ export default function ClientPanel() {
                           )}
                           <span className="flex items-center gap-1 text-gold/70 font-bold bg-gold/10 px-1.5 py-0.5 rounded whitespace-nowrap">
                             <Clock className="w-3 h-3 shrink-0" />
-                            Espera: {queueWaitTimes[booking.id] || 0} min
+                            Espera: {formatTime(queueWaitTimes[booking.id] || 0)}
                           </span>
                         </div>
                         {booking.status === BookingStatus.CHECKING_IN && (
@@ -377,24 +491,26 @@ export default function ClientPanel() {
       </main>
 
       {/* Floating Action / Stats */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-carbon via-carbon to-transparent">
-        {isOpen ? (
-          <button 
-            onClick={() => {
-              setFormType('walk-in');
-              setShowJoinForm(true);
-            }}
-            className="w-full max-w-md mx-auto gold-gradient text-carbon font-bold py-4 rounded-xl shadow-xl shadow-gold/20 flex items-center justify-center gap-2"
-          >
-            <Scissors className="w-5 h-5" />
-            ENTRAR NA FILA AGORA
-          </button>
-        ) : (
-          <div className="w-full max-w-md mx-auto bg-red-500/10 border border-red-500/20 text-red-500 font-bold py-4 rounded-xl flex items-center justify-center gap-2">
-            BARBEARIA FECHADA
-          </div>
-        )}
-      </div>
+      {!myBooking && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-carbon via-carbon to-transparent">
+          {isOpen ? (
+            <button 
+              onClick={() => {
+                setFormType('walk-in');
+                setShowJoinForm(true);
+              }}
+              className="w-full max-w-md mx-auto gold-gradient text-carbon font-bold py-4 rounded-xl shadow-xl shadow-gold/20 flex items-center justify-center gap-2"
+            >
+              <Scissors className="w-5 h-5" />
+              ENTRAR NA FILA AGORA
+            </button>
+          ) : (
+            <div className="w-full max-w-md mx-auto bg-red-500/10 border border-red-500/20 text-red-500 font-bold py-4 rounded-xl flex items-center justify-center gap-2">
+              BARBEARIA FECHADA
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Join Form Modal */}
       <AnimatePresence>
@@ -403,15 +519,15 @@ export default function ClientPanel() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-end sm:justify-center items-center p-4 sm:p-4"
+            className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4"
           >
             <motion.div 
               initial={{ y: 200 }}
               animate={{ y: 0 }}
               exit={{ y: 200 }}
-              className="bg-carbon-light flex-shrink-0 w-full max-w-[calc(100vw-2rem)] sm:max-w-md rounded-t-3xl sm:rounded-3xl p-4 sm:p-8 border border-white/10 max-h-[90vh] overflow-y-auto overflow-x-hidden"
+              className="bg-carbon-light flex-shrink-0 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 border-t sm:border border-white/10 max-h-[85vh] overflow-y-auto overflow-x-hidden"
             >
-              <div className="flex justify-between items-start mb-6">
+              <div className="flex justify-between items-start mb-5">
                 <div>
                   <h2 className="text-2xl font-display font-bold gold-text-gradient">
                     {formType === 'scheduled' ? 'Agendar' : 'Entrar na Fila'}
@@ -427,9 +543,9 @@ export default function ClientPanel() {
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">Nome Completo</label>
+                  <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Nome Completo</label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                     <input 
@@ -438,13 +554,13 @@ export default function ClientPanel() {
                       onChange={(e) => setFormData({...formData, name: e.target.value})}
                       type="text" 
                       placeholder="Ex: João Silva" 
-                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 focus:outline-none focus:border-gold/50 text-sm"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">WhatsApp</label>
+                  <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">WhatsApp</label>
                   <div className="relative">
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                     <input 
@@ -453,46 +569,46 @@ export default function ClientPanel() {
                       onChange={(e) => setFormData({...formData, whatsapp: e.target.value.replace(/\D/g, '')})}
                       type="tel" 
                       placeholder="DDD + Número" 
-                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 focus:outline-none focus:border-gold/50 text-sm"
                     />
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                   <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">Barbeiro</label>
+                    <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Barbeiro</label>
                     <select 
                       value={formData.barberId}
                       onChange={(e) => setFormData({...formData, barberId: e.target.value})}
-                      className="w-full bg-carbon border border-white/10 rounded-xl py-3 px-4 focus:outline-none focus:ring-1 focus:ring-gold/50 text-white"
+                      className="w-full bg-carbon border border-white/10 rounded-xl py-2.5 px-3 focus:outline-none focus:ring-1 focus:ring-gold/50 text-white text-sm"
                     >
                       <option value="any" className="bg-carbon text-white">Qualquer um</option>
                     </select>
                   </div>
                   {formType === 'scheduled' && (
-                    <div className="flex flex-col sm:flex-row gap-4 w-full overflow-hidden">
+                    <div className="flex flex-col sm:flex-row gap-3 w-full overflow-hidden">
                       <div className="w-full sm:flex-1 min-w-0">
-                        <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">Data</label>
+                        <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Data</label>
                         <div className="relative">
                           <input 
                             type="date" 
                             required
                             value={formData.scheduledDate}
                             onChange={(e) => setFormData({...formData, scheduledDate: e.target.value})}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-3 text-white focus:outline-none focus:border-gold/50 text-sm"
+                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-3 text-white focus:outline-none focus:border-gold/50 text-sm"
                             style={{ colorScheme: 'dark', minWidth: '0', maxWidth: '100%' }}
                           />
                         </div>
                       </div>
                       <div className="w-full sm:flex-1 min-w-0">
-                        <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">Horário</label>
+                        <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Horário</label>
                         <div className="relative">
                           <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                           <select 
                             required
                             value={formData.scheduledTime}
                             onChange={(e) => setFormData({...formData, scheduledTime: e.target.value})}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white focus:outline-none focus:border-gold/50 appearance-none text-sm"
+                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 text-white focus:outline-none focus:border-gold/50 appearance-none text-sm"
                             style={{ colorScheme: 'dark', minWidth: '0', maxWidth: '100%' }}
                           >
                             <option value="" disabled>Selecione um horário</option>
@@ -564,6 +680,72 @@ export default function ClientPanel() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {editingServices && (
+          <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+             <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+                  <button 
+                    onClick={() => setEditingServices(null)}
+                    className="absolute top-4 right-4 text-white/40 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
+                      <Scissors className="w-5 h-5" />
+                    </div>
+                    <h2 className="text-xl font-display font-bold">Editar Serviços</h2>
+                  </div>
+
+                  <form onSubmit={handleUpdateServices} className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
+                      <div className="flex flex-wrap gap-2">
+                         {services.map(s => (
+                           <button
+                             key={s.id}
+                             type="button"
+                             onClick={() => {
+                               setEditingServices(prev => {
+                                 if (!prev) return prev;
+                                 return {
+                                   ...prev,
+                                   services: prev.services.includes(s.name)
+                                     ? prev.services.filter(id => id !== s.name)
+                                     : [...prev.services, s.name]
+                                 };
+                               });
+                             }}
+                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${editingServices.services.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                           >
+                             {s.name}
+                           </button>
+                         ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-4 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setEditingServices(null)}
+                        className="px-6 py-3 rounded-lg font-bold text-white/40 hover:text-white transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors"
+                      >
+                        Atualizar
+                      </button>
+                    </div>
+                  </form>
+             </div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }

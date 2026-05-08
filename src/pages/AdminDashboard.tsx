@@ -5,12 +5,13 @@ import { useServices } from '../hooks/useServices';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { db, auth } from '../lib/firebase';
-import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField } from 'firebase/firestore';
 import { BookingStatus } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
 import BillingView from '../components/BillingView';
 import ServicesManager from '../components/ServicesManager';
+import { formatTime } from '../utils';
 import { 
   Play, 
   CheckCircle, 
@@ -25,7 +26,8 @@ import {
   Clock,
   MessageSquare,
   Menu,
-  X
+  X,
+  Edit2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -34,7 +36,7 @@ export default function AdminDashboard() {
   const { services } = useServices();
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus } = useSettings();
-  const { activeRemainingMinutes, queueWaitTimes, sortedQueue } = useQueueTimers(activeBooking, queue, services, breaks);
+  const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = useQueueTimers(activeBooking, queue, services, breaks);
   useNotifications(queue, activeBooking);
   const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers'>('queue');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -48,13 +50,40 @@ export default function AdminDashboard() {
     name: '',
     whatsapp: '',
     serviceIds: [] as string[],
+    type: 'walk-in',
+    scheduledTime: '',
+    scheduledDate: new Date().toISOString().split('T')[0],
   });
+
+  const [editingServicesBooking, setEditingServicesBooking] = useState<{id: string, services: string[]} | null>(null);
+
+  const handleUpdateServices = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingServicesBooking || editingServicesBooking.services.length === 0) {
+      toast.error('Selecione pelo menos um serviço');
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'bookings', editingServicesBooking.id), {
+        serviceId: editingServicesBooking.services.join(', ')
+      });
+      toast.success('Serviços atualizados com sucesso');
+      setEditingServicesBooking(null);
+    } catch (err) {
+      toast.error('Erro ao atualizar serviços');
+    }
+  };
 
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClientData.name || !newClientData.whatsapp) return;
     if (newClientData.serviceIds.length === 0) {
       toast.error("Selecione pelo menos um serviço");
+      return;
+    }
+    const isScheduled = newClientData.type === 'scheduled';
+    if (isScheduled && !newClientData.scheduledTime) {
+      toast.error('Por favor, informe o horário do agendamento.');
       return;
     }
 
@@ -64,13 +93,14 @@ export default function AdminDashboard() {
         clientWhatsapp: newClientData.whatsapp,
         serviceId: newClientData.serviceIds.join(', '),
         barberId: 'any',
-        type: 'walk-in',
+        type: newClientData.type,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
+        ...(isScheduled && { scheduledTime: newClientData.scheduledTime, scheduledDate: newClientData.scheduledDate }),
       });
-      toast.success('Cliente adicionado à fila');
+      toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
       setIsAddingClient(false);
-      setNewClientData({ name: '', whatsapp: '', serviceIds: [] });
+      setNewClientData({ name: '', whatsapp: '', serviceIds: [], type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
     } catch(err) {
       toast.error('Erro ao adicionar cliente');
     }
@@ -135,14 +165,18 @@ export default function AdminDashboard() {
     if (!bookingToUndo) return;
 
     try {
-      await deleteDoc(doc(db, 'bookings', bookingId));
+      await updateDoc(doc(db, 'bookings', bookingId), {
+        status: BookingStatus.CANCELLED
+      });
       toast((t) => (
         <div className="flex items-center gap-3">
           <span className="text-sm">Cliente removido</span>
           <button
             onClick={async () => {
               toast.dismiss(t.id);
-              await setDoc(doc(db, 'bookings', bookingToUndo.id), bookingToUndo);
+              await updateDoc(doc(db, 'bookings', bookingToUndo.id), {
+                status: bookingToUndo.status
+              });
               toast.success('Ação desfeita');
             }}
             className="text-gold font-bold px-3 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors text-xs uppercase"
@@ -156,41 +190,73 @@ export default function AdminDashboard() {
     }
   };
 
+  const markPresent = async (bookingId: string) => {
+    try {
+      await updateDoc(doc(db, 'bookings', bookingId), {
+        status: BookingStatus.CHECKING_IN
+      });
+      toast.success('Presença confirmada');
+    } catch(err) {
+      toast.error('Erro ao confirmar presença');
+    }
+  };
+
+  const undoPresent = async (bookingId: string) => {
+    try {
+      await updateDoc(doc(db, 'bookings', bookingId), {
+        status: BookingStatus.WAITING,
+        checkInTime: deleteField()
+      });
+      toast.success('Presença cancelada');
+    } catch(err) {
+      toast.error('Erro ao cancelar presença');
+    }
+  };
+
+  const getBaseTime = (b: any) => {
+    let time = Infinity;
+    if (b.type === 'scheduled') {
+      if (!b.scheduledTime) return Infinity;
+      const [h, m] = b.scheduledTime.split(':').map(Number);
+      const d = new Date();
+      if (b.scheduledDate) {
+        const [year, month, day] = b.scheduledDate.split('-').map(Number);
+        d.setFullYear(year, month - 1, day);
+      }
+      d.setHours(h, m, 0, 0);
+      time = d.getTime();
+    } else {
+      if (b.createdAt) {
+         if (typeof b.createdAt.toMillis === 'function') time = b.createdAt.toMillis();
+         else if (typeof b.createdAt === 'string') time = new Date(b.createdAt).getTime();
+         else if (typeof b.createdAt === 'number') time = b.createdAt;
+      }
+    }
+    return time;
+  };
+
   const moveUp = async (idx: number) => {
     if (idx === 0) return;
     const current = sortedQueue[idx];
-    
-    // Find previous item of the same type
-    let prevIdx = idx - 1;
-    while (prevIdx >= 0 && sortedQueue[prevIdx].type !== current.type) {
-      prevIdx--;
-    }
-
-    if (prevIdx < 0) {
-       toast.error(`Este já é o primeiro ${current.type === 'walk-in' ? 'presencial' : 'agendamento'} na fila.`);
-       return;
-    }
-
-    const prev = sortedQueue[prevIdx];
+    const prev = sortedQueue[idx - 1];
 
     try {
-      if (current.type === 'walk-in') {
-        await Promise.all([
-          updateDoc(doc(db, 'bookings', current.id), { createdAt: prev.createdAt }),
-          updateDoc(doc(db, 'bookings', prev.id), { createdAt: current.createdAt })
-        ]);
-      } else {
-        await Promise.all([
-          updateDoc(doc(db, 'bookings', current.id), { 
-            scheduledTime: prev.scheduledTime, 
-            scheduledDate: prev.scheduledDate 
-          }),
-          updateDoc(doc(db, 'bookings', prev.id), { 
-            scheduledTime: current.scheduledTime, 
-            scheduledDate: current.scheduledDate 
-          })
-        ]);
-      }
+      const batch = writeBatch(db);
+      
+      const targetTimeCurrent = queueIntervals[prev.id].start;
+      const durationCurrent = queueIntervals[current.id].end - queueIntervals[current.id].start;
+      const targetTimePrev = targetTimeCurrent + durationCurrent + (15 * 60000); // 15 mins buffer
+
+      const baseA = getBaseTime(current);
+      const baseB = getBaseTime(prev);
+      
+      const newDelayA = (targetTimeCurrent - baseA) / 60000;
+      const newDelayB = (targetTimePrev - baseB) / 60000;
+
+      batch.update(doc(db, 'bookings', current.id), { delayOffset: newDelayA });
+      batch.update(doc(db, 'bookings', prev.id), { delayOffset: newDelayB });
+
+      await batch.commit();
       toast.success('Fila atualizada');
     } catch(err) {
       toast.error('Erro ao reordenar');
@@ -200,38 +266,25 @@ export default function AdminDashboard() {
   const moveDown = async (idx: number) => {
     if (!sortedQueue || idx === sortedQueue.length - 1) return;
     const current = sortedQueue[idx];
-    
-    // Find next item of the same type
-    let nextIdx = idx + 1;
-    while (nextIdx < sortedQueue.length && sortedQueue[nextIdx].type !== current.type) {
-      nextIdx++;
-    }
-
-    if (nextIdx >= sortedQueue.length) {
-       toast.error(`Este já é o último ${current.type === 'walk-in' ? 'presencial' : 'agendamento'} na fila.`);
-       return;
-    }
-
-    const next = sortedQueue[nextIdx];
+    const next = sortedQueue[idx + 1];
 
     try {
-      if (current.type === 'walk-in') {
-        await Promise.all([
-          updateDoc(doc(db, 'bookings', current.id), { createdAt: next.createdAt }),
-          updateDoc(doc(db, 'bookings', next.id), { createdAt: current.createdAt })
-        ]);
-      } else {
-        await Promise.all([
-          updateDoc(doc(db, 'bookings', current.id), { 
-            scheduledTime: next.scheduledTime, 
-            scheduledDate: next.scheduledDate 
-          }),
-          updateDoc(doc(db, 'bookings', next.id), { 
-            scheduledTime: current.scheduledTime, 
-            scheduledDate: current.scheduledDate 
-          })
-        ]);
-      }
+      const batch = writeBatch(db);
+
+      const targetTimeNext = queueIntervals[current.id].start;
+      const durationNext = queueIntervals[next.id].end - queueIntervals[next.id].start;
+      const targetTimeCurrent = targetTimeNext + durationNext + (15 * 60000); // 15 mins buffer
+
+      const baseA = getBaseTime(current);
+      const baseB = getBaseTime(next);
+
+      const newDelayA = (targetTimeCurrent - baseA) / 60000;
+      const newDelayB = (targetTimeNext - baseB) / 60000;
+
+      batch.update(doc(db, 'bookings', current.id), { delayOffset: newDelayA });
+      batch.update(doc(db, 'bookings', next.id), { delayOffset: newDelayB });
+
+      await batch.commit();
       toast.success('Fila atualizada');
     } catch(err) {
       toast.error('Erro ao reordenar');
@@ -369,7 +422,7 @@ export default function AdminDashboard() {
                       <Clock className="w-5 h-5" />
                       <div>
                         <p className="font-bold text-sm">Pausa Agendada</p>
-                        <p className="text-xs text-white/50">{new Date(b.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • Duração de {b.duration} min</p>
+                        <p className="text-xs text-white/50">{new Date(b.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • Duração de {formatTime(b.duration)}</p>
                       </div>
                     </div>
                     <button onClick={() => removeBreak(b.id)} className="text-white/40 hover:text-red-400 text-xs uppercase font-bold tracking-wider">
@@ -455,6 +508,23 @@ export default function AdminDashboard() {
                   </div>
 
                   <form onSubmit={handleAddClient} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-2 mb-4 p-1 bg-black/40 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setNewClientData({ ...newClientData, type: 'walk-in' })}
+                        className={`py-2 rounded-lg text-sm font-bold transition-all ${newClientData.type === 'walk-in' ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
+                      >
+                        Entrar na Fila
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewClientData({ ...newClientData, type: 'scheduled' })}
+                        className={`py-2 rounded-lg text-sm font-bold transition-all ${newClientData.type === 'scheduled' ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
+                      >
+                        Agendar Horário
+                      </button>
+                    </div>
+
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Nome do Cliente</label>
                       <input
@@ -477,6 +547,34 @@ export default function AdminDashboard() {
                         required
                       />
                     </div>
+
+                    {newClientData.type === 'scheduled' && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Data</label>
+                          <input 
+                            type="date" 
+                            required
+                            value={newClientData.scheduledDate}
+                            onChange={(e) => setNewClientData({...newClientData, scheduledDate: e.target.value})}
+                            className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
+                            style={{ colorScheme: 'dark' }}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Horário</label>
+                          <input 
+                            type="time" 
+                            required
+                            value={newClientData.scheduledTime}
+                            onChange={(e) => setNewClientData({...newClientData, scheduledTime: e.target.value})}
+                            className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
+                            style={{ colorScheme: 'dark' }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços</label>
                       <div className="flex flex-wrap gap-2">
@@ -520,6 +618,70 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {/* Edit Services Modal */}
+            {editingServicesBooking && (
+              <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+                  <button 
+                    onClick={() => setEditingServicesBooking(null)}
+                    className="absolute top-4 right-4 text-white/40 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
+                      <Scissors className="w-5 h-5" />
+                    </div>
+                    <h2 className="text-xl font-display font-bold">Editar Serviços</h2>
+                  </div>
+
+                  <form onSubmit={handleUpdateServices} className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
+                      <div className="flex flex-wrap gap-2">
+                         {services.map(s => (
+                           <button
+                             key={s.id}
+                             type="button"
+                             onClick={() => {
+                               setEditingServicesBooking(prev => {
+                                 if (!prev) return prev;
+                                 return {
+                                   ...prev,
+                                   services: prev.services.includes(s.name)
+                                     ? prev.services.filter(id => id !== s.name)
+                                     : [...prev.services, s.name]
+                                 };
+                               });
+                             }}
+                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${editingServicesBooking.services.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                           >
+                             {s.name}
+                           </button>
+                         ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-4 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setEditingServicesBooking(null)}
+                        className="px-6 py-3 rounded-lg font-bold text-white/40 hover:text-white transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors"
+                      >
+                        Atualizar
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Active Booking Column */}
               <div className="lg:col-span-1">
@@ -535,11 +697,16 @@ export default function AdminDashboard() {
                       </div>
                       <div>
                         <h3 className="text-2xl font-display font-bold">{activeBooking.clientName}</h3>
-                        <p className="text-gold text-sm font-medium">{activeBooking.serviceId}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-gold text-sm font-medium">{activeBooking.serviceId}</p>
+                          <button onClick={() => setEditingServicesBooking({id: activeBooking.id, services: activeBooking.serviceId.split(', ')})} className="text-white/40 hover:text-white p-1">
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                        </div>
                         <div className="flex items-center gap-1 mt-1 text-white/40">
                           <Clock className="w-3 h-3" />
                           <p className="text-xs">
-                            {activeBooking.serviceStartTime ? `Restam aprox. ${activeRemainingMinutes} min` : "Iniciando..."}
+                            {activeBooking.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes)}` : "Iniciando..."}
                           </p>
                         </div>
                       </div>
@@ -591,7 +758,12 @@ export default function AdminDashboard() {
                           <div className="text-white/20 font-mono text-xs sm:text-sm w-4 sm:w-6 pt-0.5 sm:pt-0 shrink-0">{idx + 1}</div>
                           <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
-                            <span className="text-white/50 text-xs sm:text-sm truncate max-w-[150px] sm:max-w-xs">{item.serviceId}</span>
+                            <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
+                              <span className="truncate">{item.serviceId}</span>
+                              <button onClick={() => setEditingServicesBooking({id: item.id, services: item.serviceId.split(', ')})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                            </span>
                             <span className={`text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap ${item.type === 'scheduled' ? 'bg-gold/20 text-gold' : 'bg-white/10 text-white/40'} uppercase font-bold`}>
                               {item.type === 'walk-in' ? 'PRESENCIAL' : `AGENDADO ${item.scheduledDate ? item.scheduledDate.split('-').reverse().slice(0,2).join('/') + ' ' : ''}${item.scheduledTime || ''}`}
                             </span>
@@ -604,7 +776,7 @@ export default function AdminDashboard() {
                             <span className="hidden sm:inline">•</span>
                             <span className="flex items-center gap-1 text-gold/70 font-bold bg-gold/10 px-1.5 py-0.5 rounded whitespace-nowrap">
                               <Clock className="w-3 h-3 shrink-0" />
-                              Espera: {queueWaitTimes[item.id] || 0} min
+                              Espera: {formatTime(queueWaitTimes[item.id] || 0)}
                             </span>
                           </div>
 
@@ -632,6 +804,27 @@ export default function AdminDashboard() {
                              >
                                <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
                              </button>
+
+                             {item.status === 'checking-in' ? (
+                               <button
+                                 onClick={() => undoPresent(item.id)}
+                                 className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2.5 rounded-lg font-bold text-[10px] sm:text-sm bg-green-500/10 text-green-500 hover:bg-red-500/10 hover:text-red-500 transition-all shrink-0 group"
+                               >
+                                 <CheckCircle className="w-3 h-3 sm:w-4 sm:h-4 group-hover:hidden" />
+                                 <XCircle className="w-3 h-3 sm:w-4 sm:h-4 hidden group-hover:block" />
+                                 <span className="group-hover:hidden">PRESENTE</span>
+                                 <span className="hidden group-hover:block">CANCELAR</span>
+                               </button>
+                             ) : (
+                               <button 
+                                 onClick={() => markPresent(item.id)}
+                                 className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2.5 rounded-lg font-bold text-[10px] sm:text-sm bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-all shrink-0"
+                               >
+                                 <CheckCircle className="w-3 h-3 sm:w-4 sm:h-4" />
+                                 PRESENÇA
+                               </button>
+                             )}
+
                              <button 
                                onClick={() => startService(item.id)}
                                className="flex items-center gap-1.5 sm:gap-2 whitespace-nowrap bg-gold/10 hover:bg-gold text-gold hover:text-carbon px-3 py-1.5 sm:px-4 sm:py-2.5 rounded-lg font-bold text-[10px] sm:text-sm transition-all shrink-0"

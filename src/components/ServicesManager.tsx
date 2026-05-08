@@ -4,6 +4,7 @@ import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc } from
 import { Service } from '../types';
 import { Plus, Edit2, Trash2, X, Save, Image as ImageIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { formatTime } from '../utils';
 
 export default function ServicesManager() {
   const [services, setServices] = useState<Service[]>([]);
@@ -219,7 +220,7 @@ export default function ServicesManager() {
               </div>
               <p className="text-sm text-white/50 mb-6 flex items-center gap-1">
                  <span className="inline-block w-2 h-2 rounded-full bg-white/20"></span>
-                 Duração: {service.duration} min
+                 Duração: {formatTime(service.duration)}
               </p>
 
               <div className="mt-auto flex gap-2 border-t border-white/10 pt-4">
