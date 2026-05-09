@@ -29,7 +29,23 @@ export function useQueueTimers(
       startTimeMillis = activeBooking.serviceStartTime;
     }
 
-    const elapsedMinutes = Math.floor((now - startTimeMillis) / 60000);
+    let calculationNow = now;
+    if (activeBooking.status === 'paused' && activeBooking.pausedAt) {
+      if (typeof (activeBooking.pausedAt as any).toMillis === 'function') {
+        calculationNow = (activeBooking.pausedAt as any).toMillis();
+      } else if (typeof activeBooking.pausedAt === 'string') {
+        calculationNow = new Date(activeBooking.pausedAt).getTime();
+      } else if (typeof activeBooking.pausedAt === 'number') {
+        calculationNow = activeBooking.pausedAt;
+      }
+    }
+
+    let elapsedMillis = calculationNow - startTimeMillis;
+    if (activeBooking.totalPausedDuration) {
+      elapsedMillis -= activeBooking.totalPausedDuration;
+    }
+
+    const elapsedMinutes = Math.floor(elapsedMillis / 60000);
     
     // Find service duration (handle multiple)
     let baseDuration = 0;
@@ -55,16 +71,13 @@ export function useQueueTimers(
     activeRemainingMinutes = Math.max(0, expectedDuration - elapsedMinutes);
   }
 
-  // Dynamic sorting algorithm based on arrivalTime (scheduledTime)
-  const getMillis = (dateObj: any, booking?: any) => {
-     let time = Infinity;
+  // Dynamic sorting algorithm
+  const getMillis = (dateObj: any) => {
+     let time = Date.now(); // Default to now for pending serverTimestamp()
      if (dateObj) {
         if (typeof dateObj.toMillis === 'function') time = dateObj.toMillis();
         else if (typeof dateObj === 'string') time = new Date(dateObj).getTime();
         else if (typeof dateObj === 'number') time = dateObj;
-     }
-     if (time !== Infinity && booking && booking.delayOffset) {
-        time += booking.delayOffset * 60000;
      }
      return time;
   };
@@ -90,11 +103,13 @@ export function useQueueTimers(
       d.setFullYear(year, month - 1, day);
     }
     d.setHours(h, m, 0, 0);
-    let time = d.getTime();
-    if (b.delayOffset) {
-      time += b.delayOffset * 60000;
-    }
-    return time;
+    return d.getTime();
+  };
+
+  const getPriority = (b: any) => {
+     if (b.priority) return b.priority;
+     if (b.type === 'scheduled') return getSchedTime(b);
+     return getMillis(b.createdAt);
   };
 
   let currentSimulationTime = now + (activeRemainingMinutes * 60000);
@@ -102,62 +117,33 @@ export function useQueueTimers(
   const queueIntervals: Record<string, { start: number; end: number }> = {};
   let remainingBreaks = [...breaks].sort((a,b) => a.startTime - b.startTime);
 
-  const scheduled = queue.filter(q => q.type === 'scheduled').sort((a, b) => getSchedTime(a) - getSchedTime(b));
-  const walkins = queue.filter(q => q.type !== 'scheduled').sort((a, b) => getMillis(a.createdAt, a) - getMillis(b.createdAt, b));
+  // Single unified sorted queue
+  const sortedQueue = [...queue].sort((a, b) => getPriority(a) - getPriority(b));
 
-  let sortedQueue: Booking[] = [];
+  for (let i = 0; i < sortedQueue.length; i++) {
+    const picked = sortedQueue[i];
 
-  while (scheduled.length > 0 || walkins.length > 0) {
     let changed = true;
     while(changed) {
       changed = false;
-      for (let i = 0; i < remainingBreaks.length; i++) {
-        const b = remainingBreaks[i];
+      for (let j = 0; j < remainingBreaks.length; j++) {
+        const b = remainingBreaks[j];
         const breakEnd = b.startTime + (b.duration * 60000);
         if (currentSimulationTime >= b.startTime && currentSimulationTime < breakEnd) {
           currentSimulationTime = breakEnd;
           changed = true;
-          remainingBreaks.splice(i, 1);
+          remainingBreaks.splice(j, 1);
           break;
         }
       }
     }
-
-    const nextSched = scheduled[0];
-    const nextWalkin = walkins[0];
-    let picked: Booking;
-
-    if (nextSched && nextWalkin) {
-      const schedTime = getSchedTime(nextSched);
-      const walkinDuration = getDuration(nextWalkin);
-      
-      const walkinStartTime = Math.max(currentSimulationTime, getMillis(nextWalkin.createdAt, nextWalkin));
-      const walkinEndTime = walkinStartTime + (walkinDuration * 60000);
-      const margin = 10 * 60000;
-      
-      if (currentSimulationTime >= schedTime) {
-         picked = scheduled.shift()!;
-      } else {
-         if (walkinEndTime + margin <= schedTime) {
-            picked = walkins.shift()!;
-         } else {
-            picked = scheduled.shift()!;
-         }
-      }
-    } else if (nextSched) {
-      picked = scheduled.shift()!;
-    } else {
-      picked = walkins.shift()!;
-    }
-
-    sortedQueue.push(picked);
 
     let startTimeForWait: number;
     if (picked.type === 'scheduled') {
       const sTime = getSchedTime(picked);
       startTimeForWait = Math.max(currentSimulationTime, sTime);
     } else {
-      startTimeForWait = Math.max(currentSimulationTime, getMillis(picked.createdAt, picked));
+      startTimeForWait = Math.max(currentSimulationTime, getMillis(picked.createdAt));
     }
 
     const itemDuration = getDuration(picked) * 60000;

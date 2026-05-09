@@ -5,7 +5,7 @@ import { useQueueTimers } from '../hooks/useQueueTimers';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2 } from 'lucide-react';
+import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle } from 'lucide-react';
 import { BookingStatus, BookingType, Service } from '../types';
 import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -22,7 +22,7 @@ export default function ClientPanel() {
   const navigate = useNavigate();
   const [services, setServices] = useState<Service[]>([]);
   const { breaks } = useBreaks();
-  const { isOpen } = useSettings();
+  const { isOpen, schedulingFee } = useSettings();
   const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals } = useQueueTimers(activeBooking, queue, services, breaks);
 
   const [formData, setFormData] = useState({
@@ -211,7 +211,7 @@ export default function ClientPanel() {
       (error) => {
         toast.dismiss('location-check');
         if (error.code === error.PERMISSION_DENIED) {
-           toast.error('Você só pode marcar presença se permitir o compartilhamento de localização.');
+           toast.error('Localização bloqueada. Por favor, libere a permissão nas configurações do seu navegador (clique no cadeado ao lado do endereço) e tente novamente.', { duration: 6000 });
         } else {
            toast.error('Não foi possível obter sua localização.');
         }
@@ -264,7 +264,7 @@ export default function ClientPanel() {
   const myPosition = myBooking ? sortedQueue?.findIndex(b => b.id === myBookingId) + 1 : -1;
 
   return (
-    <div className="min-h-screen bg-carbon overflow-x-hidden pt-6 pb-24 px-4 sm:px-6 relative">
+    <div className="min-h-[100dvh] bg-carbon overflow-x-hidden pt-6 pb-24 px-4 sm:px-6 relative">
       <button 
         onClick={() => setShowMenu(true)}
         className="absolute top-6 left-6 p-2 text-white/70 hover:text-white z-50 cursor-pointer"
@@ -317,7 +317,7 @@ export default function ClientPanel() {
                 </button>
               </div>
 
-              <div className="flex-1">
+              <div className="flex-1 space-y-2">
                 <button 
                   onClick={() => navigate('/admin')}
                   className="w-full flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 rounded-xl transition-colors text-left"
@@ -384,6 +384,14 @@ export default function ClientPanel() {
                      {confirmingCancel ? 'TEM CERTEZA? CLIQUE AQUI' : 'CANCELAR ATENDIMENTO'}
                    </button>
                  )}
+               </div>
+
+               <div className="mt-4 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex gap-2.5">
+                 <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                 <p className="text-white/60 text-xs leading-relaxed">
+                   <span className="text-red-400 font-bold block mb-0.5">Aviso Importante</span>
+                   Em caso de atraso e se você não estiver presente na sua vez, você perderá sua posição na fila/agendamento.
+                 </p>
                </div>
             </div>
           </section>
@@ -666,6 +674,21 @@ export default function ClientPanel() {
                          ))
                       )}
                     </div>
+                  </div>
+                </div>
+
+                <div className="bg-gold/10 border border-gold/20 rounded-xl p-4 mt-4 flex gap-3">
+                  <AlertTriangle className="w-5 h-5 text-gold shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-gold text-sm font-bold">Aviso Importante</p>
+                    <p className="text-white/70 text-xs mt-1 leading-relaxed">
+                      Em caso de atraso e se você não estiver presente na sua vez, você perderá sua posição na fila/agendamento.
+                    </p>
+                    {formType === 'scheduled' && schedulingFee > 0 && (
+                      <p className="text-white/70 text-xs mt-2 leading-relaxed font-semibold bg-black/20 p-2 rounded inline-block">
+                        Há uma taxa de agendamento de R$ {schedulingFee.toFixed(2)} que será cobrada no momento do serviço.
+                      </p>
+                    )}
                   </div>
                 </div>
 

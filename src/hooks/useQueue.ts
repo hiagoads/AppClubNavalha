@@ -11,7 +11,7 @@ export function useQueue() {
     // Only active bookings (waiting, in-service, checking-in)
     const q = query(
       collection(db, 'bookings'),
-      where('status', 'in', [BookingStatus.WAITING, BookingStatus.CHECKING_IN, BookingStatus.IN_SERVICE]),
+      where('status', 'in', [BookingStatus.WAITING, BookingStatus.CHECKING_IN, BookingStatus.IN_SERVICE, BookingStatus.PAUSED]),
       orderBy('createdAt', 'asc')
     );
 
@@ -30,8 +30,8 @@ export function useQueue() {
     return () => unsubscribe();
   }, []);
 
-  const activeBooking = bookings.find(b => b.status === BookingStatus.IN_SERVICE);
-  const queue = bookings.filter(b => b.status !== BookingStatus.IN_SERVICE);
+  const activeBooking = bookings.find(b => b.status === BookingStatus.IN_SERVICE || b.status === BookingStatus.PAUSED);
+  const queue = bookings.filter(b => b.status !== BookingStatus.IN_SERVICE && b.status !== BookingStatus.PAUSED);
 
   return { bookings, queue, activeBooking, loading };
 }

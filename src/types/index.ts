@@ -2,6 +2,7 @@ export enum BookingStatus {
   WAITING = 'waiting',
   CHECKING_IN = 'checking-in', // Notified/Arrived
   IN_SERVICE = 'in-service',
+  PAUSED = 'paused',
   COMPLETED = 'completed',
   MISSED = 'missed',
   CANCELLED = 'cancelled'
@@ -52,6 +53,9 @@ export interface Booking {
   serviceStartTime?: string;
   estimatedEndTime?: string;
   delayOffset?: number;
+  priority?: number;
+  pausedAt?: string;
+  totalPausedDuration?: number;
 }
 
 export interface ClientStats {

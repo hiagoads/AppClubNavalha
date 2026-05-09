@@ -11,9 +11,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
 import BillingView from '../components/BillingView';
 import ServicesManager from '../components/ServicesManager';
+import { GlobalSettings } from '../components/GlobalSettings';
 import { formatTime } from '../utils';
 import { 
   Play, 
+  Pause,
   CheckCircle, 
   XCircle, 
   BarChart3, 
@@ -27,9 +29,13 @@ import {
   MessageSquare,
   Menu,
   X,
-  Edit2
+  Edit2,
+  History
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+import { useHistory } from '../hooks/useHistory';
+import { HistoryView } from '../components/HistoryView';
 
 export default function AdminDashboard() {
   const { queue, activeBooking, loading } = useQueue();
@@ -38,7 +44,7 @@ export default function AdminDashboard() {
   const { isOpen, toggleOpenStatus } = useSettings();
   const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = useQueueTimers(activeBooking, queue, services, breaks);
   useNotifications(queue, activeBooking);
-  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings'>('queue');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
   const [isAddingBreak, setIsAddingBreak] = useState(false);
@@ -160,6 +166,46 @@ export default function AdminDashboard() {
     }
   };
 
+  const pauseService = async (booking: any) => {
+    try {
+      const bookingRef = doc(db, 'bookings', booking.id);
+      await updateDoc(bookingRef, {
+        status: BookingStatus.PAUSED,
+        pausedAt: Date.now()
+      });
+      toast.success('Serviço pausado. O tempo de espera parou.');
+    } catch (err) {
+      toast.error('Erro ao pausar');
+    }
+  };
+
+  const resumeService = async (booking: any) => {
+    try {
+      let calcPausedAt = Date.now();
+      if (booking.pausedAt) {
+        if (typeof booking.pausedAt.toMillis === 'function') {
+          calcPausedAt = booking.pausedAt.toMillis();
+        } else if (typeof booking.pausedAt === 'string') {
+          calcPausedAt = new Date(booking.pausedAt).getTime();
+        } else if (typeof booking.pausedAt === 'number') {
+          calcPausedAt = booking.pausedAt;
+        }
+      }
+      const pauseDuration = Date.now() - calcPausedAt;
+      const totalPausedDuration = (booking.totalPausedDuration || 0) + pauseDuration;
+
+      const bookingRef = doc(db, 'bookings', booking.id);
+      await updateDoc(bookingRef, {
+        status: BookingStatus.IN_SERVICE,
+        pausedAt: deleteField(),
+        totalPausedDuration
+      });
+      toast.success('Serviço retomado.');
+    } catch (err) {
+      toast.error('Erro ao retomar');
+    }
+  };
+
   const removeBooking = async (bookingId: string) => {
     const bookingToUndo = queue.find(b => b.id === bookingId) || (activeBooking?.id === bookingId ? activeBooking : null);
     if (!bookingToUndo) return;
@@ -214,9 +260,9 @@ export default function AdminDashboard() {
   };
 
   const getBaseTime = (b: any) => {
-    let time = Infinity;
+    let time = Date.now();
     if (b.type === 'scheduled') {
-      if (!b.scheduledTime) return Infinity;
+      if (!b.scheduledTime) return Date.now();
       const [h, m] = b.scheduledTime.split(':').map(Number);
       const d = new Date();
       if (b.scheduledDate) {
@@ -243,18 +289,17 @@ export default function AdminDashboard() {
     try {
       const batch = writeBatch(db);
       
-      const targetTimeCurrent = queueIntervals[prev.id].start;
-      const durationCurrent = queueIntervals[current.id].end - queueIntervals[current.id].start;
-      const targetTimePrev = targetTimeCurrent + durationCurrent + (15 * 60000); // 15 mins buffer
+      let p1 = current.priority || getBaseTime(current);
+      let p2 = prev.priority || getBaseTime(prev);
+      if (p1 === p2) {
+        p1 += 10;
+      }
+      // Delete any artifacts of the old complex sorting mode
+      if (current.delayOffset !== undefined) batch.update(doc(db, 'bookings', current.id), { delayOffset: deleteField() });
+      if (prev.delayOffset !== undefined) batch.update(doc(db, 'bookings', prev.id), { delayOffset: deleteField() });
 
-      const baseA = getBaseTime(current);
-      const baseB = getBaseTime(prev);
-      
-      const newDelayA = (targetTimeCurrent - baseA) / 60000;
-      const newDelayB = (targetTimePrev - baseB) / 60000;
-
-      batch.update(doc(db, 'bookings', current.id), { delayOffset: newDelayA });
-      batch.update(doc(db, 'bookings', prev.id), { delayOffset: newDelayB });
+      batch.update(doc(db, 'bookings', current.id), { priority: p2 });
+      batch.update(doc(db, 'bookings', prev.id), { priority: p1 });
 
       await batch.commit();
       toast.success('Fila atualizada');
@@ -271,18 +316,16 @@ export default function AdminDashboard() {
     try {
       const batch = writeBatch(db);
 
-      const targetTimeNext = queueIntervals[current.id].start;
-      const durationNext = queueIntervals[next.id].end - queueIntervals[next.id].start;
-      const targetTimeCurrent = targetTimeNext + durationNext + (15 * 60000); // 15 mins buffer
+      let p1 = current.priority || getBaseTime(current);
+      let p2 = next.priority || getBaseTime(next);
+      if (p1 === p2) {
+        p2 += 10;
+      }
+      if (current.delayOffset !== undefined) batch.update(doc(db, 'bookings', current.id), { delayOffset: deleteField() });
+      if (next.delayOffset !== undefined) batch.update(doc(db, 'bookings', next.id), { delayOffset: deleteField() });
 
-      const baseA = getBaseTime(current);
-      const baseB = getBaseTime(next);
-
-      const newDelayA = (targetTimeCurrent - baseA) / 60000;
-      const newDelayB = (targetTimeNext - baseB) / 60000;
-
-      batch.update(doc(db, 'bookings', current.id), { delayOffset: newDelayA });
-      batch.update(doc(db, 'bookings', next.id), { delayOffset: newDelayB });
+      batch.update(doc(db, 'bookings', current.id), { priority: p2 });
+      batch.update(doc(db, 'bookings', next.id), { priority: p1 });
 
       await batch.commit();
       toast.success('Fila atualizada');
@@ -292,7 +335,7 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-carbon flex flex-col md:flex-row font-sans">
+    <div className="min-h-[100dvh] bg-carbon flex flex-col md:flex-row font-sans">
       {/* Mobile Top Bar */}
       <div className="md:hidden bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
         <div>
@@ -321,7 +364,7 @@ export default function AdminDashboard() {
       {/* Sidebar */}
       <aside className={`${
         isMobileMenuOpen ? 'flex' : 'hidden'
-      } md:flex w-full md:w-64 bg-carbon-light border-b md:border-b-0 md:border-r border-white/10 p-4 sm:p-6 flex-col shrink-0 overflow-y-auto fixed md:relative h-[calc(100vh-80px)] md:h-auto z-10 top-[80px] md:top-0`}>
+      } md:flex w-full md:w-64 bg-carbon-light border-b md:border-b-0 md:border-r border-white/10 p-4 sm:p-6 flex-col shrink-0 overflow-y-auto fixed md:relative h-[calc(100dvh-80px)] md:h-auto z-10 top-[80px] md:top-0 pb-12 md:pb-6`}>
         <div className="hidden md:flex flex-col mb-6 sm:mb-10">
           <div className="flex items-center gap-2 mb-1 sm:mb-2">
             <h2 className="text-base sm:text-lg font-sans font-bold tracking-widest copper-text uppercase">Club</h2>
@@ -355,6 +398,12 @@ export default function AdminDashboard() {
           </button>
           <button onClick={() => { setActiveTab('billing'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
             <NavItem icon={<BarChart3 />} label="Faturamento" active={activeTab === 'billing'} />
+          </button>
+          <button onClick={() => { setActiveTab('history'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
+            <NavItem icon={<History />} label="Histórico (Restaurar)" active={activeTab === 'history'} />
+          </button>
+          <button onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
+            <NavItem icon={<Settings />} label="Configurações" active={activeTab === 'settings'} />
           </button>
           <button onClick={() => { setActiveTab('barbers'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
             <NavItem icon={<Scissors />} label="Barbeiros" active={activeTab === 'barbers'} />
@@ -706,27 +755,51 @@ export default function AdminDashboard() {
                         <div className="flex items-center gap-1 mt-1 text-white/40">
                           <Clock className="w-3 h-3" />
                           <p className="text-xs">
-                            {activeBooking.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes)}` : "Iniciando..."}
+                            {activeBooking.status === BookingStatus.PAUSED ? (
+                              <span className="text-yellow-500 font-bold">Pausado</span>
+                            ) : activeBooking.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes)}` : "Iniciando..."}
                           </p>
                         </div>
                       </div>
                     </div>
 
                     <div className="space-y-2 sm:space-y-3">
-                      <button 
-                        onClick={() => completeService(activeBooking.id)}
-                        className="w-full bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 py-3 sm:py-4 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 font-bold text-xs sm:text-base md:text-sm lg:text-base transition-all"
-                      >
-                        <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5" />
-                        CONCLUIR ATENDIMENTO
-                      </button>
-                      <button 
-                         onClick={() => removeBooking(activeBooking.id)}
-                         className="w-full bg-white/5 hover:bg-white/10 text-white/40 border border-white/10 py-2 sm:py-3 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 text-xs sm:text-sm"
-                      >
-                        <XCircle className="w-4 h-4" />
-                        Cancelar
-                      </button>
+                      {activeBooking.status === BookingStatus.PAUSED ? (
+                        <button 
+                          onClick={() => resumeService(activeBooking)}
+                          className="w-full bg-gold/20 hover:bg-gold/30 text-gold border border-gold/40 py-3 sm:py-4 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 font-bold text-xs sm:text-base md:text-sm lg:text-base transition-all"
+                        >
+                          <Play className="w-4 h-4 sm:w-5 sm:h-5" />
+                          RETOMAR ATENDIMENTO
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => completeService(activeBooking.id)}
+                          className="w-full bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 py-3 sm:py-4 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 font-bold text-xs sm:text-base md:text-sm lg:text-base transition-all"
+                        >
+                          <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5" />
+                          CONCLUIR ATENDIMENTO
+                        </button>
+                      )}
+                      
+                      <div className="flex gap-2">
+                        {activeBooking.status === BookingStatus.IN_SERVICE && (
+                          <button 
+                             onClick={() => pauseService(activeBooking)}
+                             className="flex-1 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 py-2 sm:py-3 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-bold transition-colors"
+                          >
+                            <Pause className="w-4 h-4" />
+                            Pausar
+                          </button>
+                        )}
+                        <button 
+                           onClick={() => removeBooking(activeBooking.id)}
+                           className="flex-1 bg-white/5 hover:bg-white/10 text-white/40 border border-white/10 py-2 sm:py-3 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 text-xs sm:text-sm transition-colors font-bold"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          Cancelar
+                        </button>
+                      </div>
                     </div>
                   </motion.div>
                 ) : (
@@ -852,6 +925,10 @@ export default function AdminDashboard() {
 
         {activeTab === 'billing' && <BillingView />}
         
+        {activeTab === 'history' && <HistoryView />}
+
+        {activeTab === 'settings' && <GlobalSettings />}
+
         {activeTab === 'services' && <ServicesManager />}
 
         {activeTab === 'barbers' && (
