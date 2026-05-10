@@ -259,47 +259,30 @@ export default function AdminDashboard() {
     }
   };
 
-  const getBaseTime = (b: any) => {
-    let time = Date.now();
-    if (b.type === 'scheduled') {
-      if (!b.scheduledTime) return Date.now();
-      const [h, m] = b.scheduledTime.split(':').map(Number);
-      const d = new Date();
-      if (b.scheduledDate) {
-        const [year, month, day] = b.scheduledDate.split('-').map(Number);
-        d.setFullYear(year, month - 1, day);
-      }
-      d.setHours(h, m, 0, 0);
-      time = d.getTime();
-    } else {
-      if (b.createdAt) {
-         if (typeof b.createdAt.toMillis === 'function') time = b.createdAt.toMillis();
-         else if (typeof b.createdAt === 'string') time = new Date(b.createdAt).getTime();
-         else if (typeof b.createdAt === 'number') time = b.createdAt;
-      }
-    }
-    return time;
-  };
-
   const moveUp = async (idx: number) => {
     if (idx === 0) return;
-    const current = sortedQueue[idx];
-    const prev = sortedQueue[idx - 1];
+    
+    // Create a new array with the swapped elements
+    const newQueue = [...sortedQueue];
+    const temp = newQueue[idx];
+    newQueue[idx] = newQueue[idx - 1];
+    newQueue[idx - 1] = temp;
 
     try {
       const batch = writeBatch(db);
       
-      let p1 = current.priority || getBaseTime(current);
-      let p2 = prev.priority || getBaseTime(prev);
-      if (p1 === p2) {
-        p1 += 10;
-      }
-      // Delete any artifacts of the old complex sorting mode
-      if (current.delayOffset !== undefined) batch.update(doc(db, 'bookings', current.id), { delayOffset: deleteField() });
-      if (prev.delayOffset !== undefined) batch.update(doc(db, 'bookings', prev.id), { delayOffset: deleteField() });
-
-      batch.update(doc(db, 'bookings', current.id), { priority: p2 });
-      batch.update(doc(db, 'bookings', prev.id), { priority: p1 });
+      // Re-index the entire queue's priorities based on the new visual order
+      // We use base time to ensure newly added items (e.g. walkins arriving now) 
+      // will naturally fall at the end of the current rearranged group.
+      const basePriority = Date.now() - (newQueue.length * 1000); 
+      
+      newQueue.forEach((booking, i) => {
+        const newPriority = basePriority + (i * 1000);
+        batch.update(doc(db, 'bookings', booking.id), { 
+          priority: newPriority,
+          delayOffset: deleteField() // Support legacy data cleanup
+        });
+      });
 
       await batch.commit();
       toast.success('Fila atualizada');
@@ -310,22 +293,25 @@ export default function AdminDashboard() {
 
   const moveDown = async (idx: number) => {
     if (!sortedQueue || idx === sortedQueue.length - 1) return;
-    const current = sortedQueue[idx];
-    const next = sortedQueue[idx + 1];
+    
+    // Create a new array with the swapped elements
+    const newQueue = [...sortedQueue];
+    const temp = newQueue[idx];
+    newQueue[idx] = newQueue[idx + 1];
+    newQueue[idx + 1] = temp;
 
     try {
       const batch = writeBatch(db);
 
-      let p1 = current.priority || getBaseTime(current);
-      let p2 = next.priority || getBaseTime(next);
-      if (p1 === p2) {
-        p2 += 10;
-      }
-      if (current.delayOffset !== undefined) batch.update(doc(db, 'bookings', current.id), { delayOffset: deleteField() });
-      if (next.delayOffset !== undefined) batch.update(doc(db, 'bookings', next.id), { delayOffset: deleteField() });
-
-      batch.update(doc(db, 'bookings', current.id), { priority: p2 });
-      batch.update(doc(db, 'bookings', next.id), { priority: p1 });
+      const basePriority = Date.now() - (newQueue.length * 1000); 
+      
+      newQueue.forEach((booking, i) => {
+        const newPriority = basePriority + (i * 1000);
+        batch.update(doc(db, 'bookings', booking.id), { 
+          priority: newPriority,
+          delayOffset: deleteField()
+        });
+      });
 
       await batch.commit();
       toast.success('Fila atualizada');
