@@ -12,6 +12,7 @@ import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { formatTime, getDistanceFromLatLonInMeters } from '../utils';
+import { useClientNotifications } from '../hooks/useClientNotifications';
 
 export default function ClientPanel() {
   const { queue, activeBooking, loading } = useQueue();
@@ -39,7 +40,7 @@ export default function ClientPanel() {
     let reqDuration = 0;
     if (formData.serviceIds.length) {
       formData.serviceIds.forEach(sName => {
-        const s = services.find(x => x.name === sName);
+        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
         reqDuration += s?.duration || 30;
       });
     } else {
@@ -128,20 +129,50 @@ export default function ClientPanel() {
     }
     
     try {
+      // Set up Web Push subscription
+      let subJson = null;
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+         try {
+           let permission = Notification.permission;
+           if (permission !== 'granted' && permission !== 'denied') {
+             permission = await Notification.requestPermission();
+           }
+           if (permission === 'granted') {
+             const { subscribeToPush } = await import('../services/pushManager');
+             const sub = await subscribeToPush();
+             if (sub) {
+               subJson = JSON.parse(JSON.stringify(sub));
+             }
+           }
+         } catch(pushErr) {
+           console.warn('Could not subscribe to push:', pushErr);
+         }
+      }
+
       const isScheduled = formType === 'scheduled';
       if (isScheduled && !formData.scheduledTime) {
         toast.error('Por favor, informe o horário do agendamento.');
         return;
       }
+      let expectedPrice = 0;
+      formData.serviceIds.forEach(sName => {
+        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
+        if (s) {
+          expectedPrice += (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+        }
+      });
+
       const docRef = await addDoc(collection(db, 'bookings'), {
         clientName: formData.name,
         clientWhatsapp: formData.whatsapp,
         serviceId: formData.serviceIds.join(', '),
+        expectedPrice: expectedPrice,
         barberId: formData.barberId,
         type: isScheduled ? BookingType.SCHEDULED : BookingType.WALK_IN,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
         ...(isScheduled && { scheduledTime: formData.scheduledTime, scheduledDate: formData.scheduledDate }),
+        ...(subJson && { pushSubscription: subJson })
       });
       localStorage.setItem('myBookingId', docRef.id);
       setMyBookingId(docRef.id);
@@ -262,6 +293,7 @@ export default function ClientPanel() {
   const myBooking = sortedQueue?.find(b => b.id === myBookingId) || 
                   (activeBooking?.id === myBookingId ? activeBooking : null);
   const myPosition = myBooking ? sortedQueue?.findIndex(b => b.id === myBookingId) + 1 : -1;
+  const myWaitTime = myBookingId ? (queueWaitTimes[myBookingId] || 0) : 0;
 
   return (
     <div className="min-h-[100dvh] bg-carbon overflow-x-hidden pt-6 pb-24 px-4 sm:px-6 relative">
@@ -652,7 +684,7 @@ export default function ClientPanel() {
                            }}
                            className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${formData.serviceIds.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
                          >
-                           {s.name} - R$ {s.price?.toFixed(2)}
+                           {s.name} - R$ {(s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice).toFixed(2) : Number(s.price).toFixed(2)}
                          </button>
                       )) : (
                         ['Corte Padrão', 'Barba', 'Corte + Barba'].map(s => (
@@ -676,6 +708,20 @@ export default function ClientPanel() {
                     </div>
                   </div>
                 </div>
+
+                {formData.serviceIds.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex justify-between items-center">
+                    <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
+                    <span className="text-gold font-bold text-xl">
+                      R$ {formData.serviceIds.reduce((acc, sName) => {
+                        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
+                        if (!s) return acc;
+                        const price = (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+                        return acc + price;
+                      }, 0).toFixed(2)}
+                    </span>
+                  </div>
+                )}
 
                 <div className="bg-gold/10 border border-gold/20 rounded-xl p-4 mt-4 flex gap-3">
                   <AlertTriangle className="w-5 h-5 text-gold shrink-0 mt-0.5" />

@@ -56,6 +56,16 @@ export interface Booking {
   priority?: number;
   pausedAt?: string;
   totalPausedDuration?: number;
+  expectedPrice?: number | null; 
+  price?: number | null; // Snapshotted price after completion
+  // Notification Flags
+  notifiedJoined?: boolean;
+  notifiedPos2?: boolean;
+  notifiedApproaching?: boolean;
+  notifiedTurnArrived?: boolean;
+  notifiedLost?: boolean;
+  notifiedCompleted?: boolean;
+  pushSubscription?: any;
 }
 
 export interface ClientStats {

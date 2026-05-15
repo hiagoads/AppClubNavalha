@@ -1,13 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useHistory } from '../hooks/useHistory';
-import { RefreshCcw, Clock } from 'lucide-react';
-import { doc, updateDoc, deleteField } from 'firebase/firestore';
+import { RefreshCcw, Clock, Trash2 } from 'lucide-react';
+import { doc, updateDoc, deleteField, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { BookingStatus } from '../types';
 import toast from 'react-hot-toast';
 
 export function HistoryView() {
   const { history, loadingHistory } = useHistory();
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const handleRestore = async (bookingId: string) => {
     try {
@@ -85,13 +86,39 @@ export function HistoryView() {
                 Finalizado às {getCompletedTime(booking)}
               </div>
             </div>
-            <button
-              onClick={() => handleRestore(booking.id)}
-              className="flex items-center space-x-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-            >
-              <RefreshCcw className="w-4 h-4" />
-              <span>Restaurar</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => handleRestore(booking.id)}
+                className="flex items-center space-x-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                title="Restaurar atendimento"
+              >
+                <RefreshCcw className="w-4 h-4" />
+                <span className="hidden sm:inline">Restaurar</span>
+              </button>
+              <button
+                onClick={async () => {
+                  if (confirmDeleteId === booking.id) {
+                    try {
+                      await deleteDoc(doc(db, 'bookings', booking.id));
+                      toast.success('Registro excluído!');
+                      setConfirmDeleteId(null);
+                    } catch (error) {
+                      toast.error('Erro ao excluir registro');
+                    }
+                  } else {
+                    setConfirmDeleteId(booking.id);
+                    setTimeout(() => setConfirmDeleteId(null), 3000);
+                  }
+                }}
+                className={`flex items-center space-x-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${confirmDeleteId === booking.id ? 'text-white bg-red-600 hover:bg-red-700' : 'text-red-600 bg-red-50 hover:bg-red-100'}`}
+                title="Excluir registro"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">
+                  {confirmDeleteId === booking.id ? 'Confirmar' : 'Excluir'}
+                </span>
+              </button>
+            </div>
           </div>
         ))}
       </div>

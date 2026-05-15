@@ -42,7 +42,8 @@ export default function AdminDashboard() {
   const { services } = useServices();
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus } = useSettings();
-  const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = useQueueTimers(activeBooking, queue, services, breaks);
+  const queueTimers = useQueueTimers(activeBooking, queue, services, breaks);
+  const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = queueTimers;
   useNotifications(queue, activeBooking);
   const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings'>('queue');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -155,11 +156,42 @@ export default function AdminDashboard() {
 
   const completeService = async (bookingId: string) => {
     try {
+      const activeInfo = activeBooking?.id === bookingId ? activeBooking : null;
+      
+      // Calculate final actual price to snapshot it
+      let finalPrice = 0;
+      if (activeInfo && activeInfo.expectedPrice !== undefined && activeInfo.expectedPrice !== null) {
+        finalPrice = Number(activeInfo.expectedPrice);
+      } else if (activeInfo && activeInfo.serviceId) {
+        const names = activeInfo.serviceId.split(',').map(s => s.trim());
+        names.forEach(n => {
+          const s = services.find(srv => 
+            srv.name.trim().toLowerCase() === n.toLowerCase() || 
+            srv.id === n
+          );
+          if (s) {
+            finalPrice += (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+          }
+        });
+      }
+
       const bookingRef = doc(db, 'bookings', bookingId);
       await updateDoc(bookingRef, {
         status: BookingStatus.COMPLETED,
-        estimatedEndTime: serverTimestamp()
+        estimatedEndTime: serverTimestamp(),
+        price: finalPrice > 0 ? finalPrice : null // Save price snapshot
       });
+      
+      if (activeInfo && activeInfo.pushSubscription) {
+        import('../services/pushManager').then(({ sendWebPush }) => {
+          sendWebPush(
+            activeInfo.pushSubscription, 
+            'Serviço Concluído', 
+            `Seu atendimento foi concluído. Obrigado por escolher a Barbearia!`
+          ).catch(console.error);
+        });
+      }
+
       toast.success('Serviço concluído!');
     } catch (err) {
       toast.error('Erro ao concluir');
@@ -214,6 +246,17 @@ export default function AdminDashboard() {
       await updateDoc(doc(db, 'bookings', bookingId), {
         status: BookingStatus.CANCELLED
       });
+
+      if (bookingToUndo.pushSubscription) {
+        import('../services/pushManager').then(({ sendWebPush }) => {
+          sendWebPush(
+            bookingToUndo.pushSubscription, 
+            'Atendimento Cancelado', 
+            `Seu atendimento foi cancelado ou você perdeu sua vez.`
+          ).catch(console.error);
+        });
+      }
+
       toast((t) => (
         <div className="flex items-center gap-3">
           <span className="text-sm">Cliente removido</span>
