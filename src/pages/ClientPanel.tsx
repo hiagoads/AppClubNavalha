@@ -11,8 +11,15 @@ import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot,
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import { formatTime, getDistanceFromLatLonInMeters } from '../utils';
+import { formatTime, getDistanceFromLatLonInMeters, parsePrice } from '../utils';
 import { useClientNotifications } from '../hooks/useClientNotifications';
+
+export const getServicePrice = (s: any) => {
+  if (!s) return 0;
+  const promo = parsePrice(s.promoPrice);
+  const reg = parsePrice(s.price);
+  return (promo > 0) ? promo : reg;
+};
 
 export default function ClientPanel() {
   const { queue, activeBooking, loading } = useQueue();
@@ -40,7 +47,7 @@ export default function ClientPanel() {
     let reqDuration = 0;
     if (formData.serviceIds.length) {
       formData.serviceIds.forEach(sName => {
-        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
+        const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
         reqDuration += s?.duration || 30;
       });
     } else {
@@ -156,9 +163,9 @@ export default function ClientPanel() {
       }
       let expectedPrice = 0;
       formData.serviceIds.forEach(sName => {
-        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
+        const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
         if (s) {
-          expectedPrice += (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+          expectedPrice += getServicePrice(s);
         }
       });
 
@@ -684,7 +691,7 @@ export default function ClientPanel() {
                            }}
                            className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${formData.serviceIds.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
                          >
-                           {s.name} - R$ {(s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice).toFixed(2) : Number(s.price).toFixed(2)}
+                           {s.name} - R$ {getServicePrice(s).toFixed(2)}
                          </button>
                       )) : (
                         ['Corte Padrão', 'Barba', 'Corte + Barba'].map(s => (
@@ -714,10 +721,9 @@ export default function ClientPanel() {
                     <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
                     <span className="text-gold font-bold text-xl">
                       R$ {formData.serviceIds.reduce((acc, sName) => {
-                        const s = services.find(x => x.name.trim().toLowerCase() === sName.toLowerCase() || x.id === sName);
+                        const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
                         if (!s) return acc;
-                        const price = (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
-                        return acc + price;
+                        return acc + getServicePrice(s);
                       }, 0).toFixed(2)}
                     </span>
                   </div>

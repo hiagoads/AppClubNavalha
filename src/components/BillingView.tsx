@@ -15,7 +15,7 @@ import {
 import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
-import { formatTime } from '../utils';
+import { formatTime, parsePrice } from '../utils';
 
 type PeriodType = 'day' | 'week' | 'month' | 'period';
 
@@ -41,18 +41,20 @@ export default function BillingView() {
   }, []);
 
   const getBookingPrice = (b: Booking) => {
-     if (b.price !== undefined && b.price !== null && Number(b.price) > 0) return Number(b.price);
-     if (b.expectedPrice !== undefined && b.expectedPrice !== null && Number(b.expectedPrice) > 0) return Number(b.expectedPrice);
+     if (b.price !== undefined && b.price !== null && parsePrice(b.price) > 0) return parsePrice(b.price);
+     if (b.expectedPrice !== undefined && b.expectedPrice !== null && parsePrice(b.expectedPrice) > 0) return parsePrice(b.expectedPrice);
      if (!b.serviceId) return 0;
      const names = b.serviceId.split(',').map(s => s.trim());
      let total = 0;
      names.forEach(n => {
        const s = services.find(srv => 
-         srv.name.trim().toLowerCase() === n.toLowerCase() || 
+         srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
          srv.id === n
        );
        if (s) {
-         total += (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+         const promo = parsePrice(s.promoPrice);
+         const reg = parsePrice(s.price);
+         total += (promo > 0) ? promo : reg;
        } else {
          total += 0; 
        }

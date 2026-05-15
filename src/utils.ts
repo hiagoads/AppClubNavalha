@@ -1,3 +1,11 @@
+export function parsePrice(val: any): number {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const parsed = parseFloat(val.replace(',', '.'));
+    return isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
 export function formatTime(totalMinutes: number): string {
   if (!totalMinutes || totalMinutes < 0) return '0 min';
   if (totalMinutes < 60) return `${Math.floor(totalMinutes)} min`;

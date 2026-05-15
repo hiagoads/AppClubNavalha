@@ -12,7 +12,7 @@ import React, { useState } from 'react';
 import BillingView from '../components/BillingView';
 import ServicesManager from '../components/ServicesManager';
 import { GlobalSettings } from '../components/GlobalSettings';
-import { formatTime } from '../utils';
+import { formatTime, parsePrice } from '../utils';
 import { 
   Play, 
   Pause,
@@ -166,11 +166,13 @@ export default function AdminDashboard() {
         const names = activeInfo.serviceId.split(',').map(s => s.trim());
         names.forEach(n => {
           const s = services.find(srv => 
-            srv.name.trim().toLowerCase() === n.toLowerCase() || 
+            srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
             srv.id === n
           );
           if (s) {
-            finalPrice += (s.promoPrice !== undefined && s.promoPrice !== null && Number(s.promoPrice) > 0) ? Number(s.promoPrice) : Number(s.price);
+            const promo = parsePrice(s.promoPrice);
+            const reg = parsePrice(s.price);
+            finalPrice += (promo > 0) ? promo : reg;
           }
         });
       }
