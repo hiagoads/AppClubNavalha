@@ -5,14 +5,13 @@ import { useQueueTimers } from '../hooks/useQueueTimers';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle } from 'lucide-react';
+import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle, Check } from 'lucide-react';
 import { BookingStatus, BookingType, Service } from '../types';
 import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { formatTime, getDistanceFromLatLonInMeters, parsePrice } from '../utils';
-import { useClientNotifications } from '../hooks/useClientNotifications';
 
 export const getServicePrice = (s: any) => {
   if (!s) return 0;
@@ -27,10 +26,20 @@ export default function ClientPanel() {
   const [formType, setFormType] = useState<'walk-in' | 'scheduled'>('walk-in');
   const [showMenu, setShowMenu] = useState(false);
   const [myBookingId, setMyBookingId] = useState(localStorage.getItem('myBookingId'));
+  // Receipt state
+  const [receipt, setReceipt] = useState<{
+    clientName: string;
+    services: string;
+    total: number;
+    fee: number;
+    date: string;
+    time: string;
+  } | null>(null);
+
   const navigate = useNavigate();
   const [services, setServices] = useState<Service[]>([]);
   const { breaks } = useBreaks();
-  const { isOpen, schedulingFee } = useSettings();
+  const { isOpen, schedulingFee, scheduleHours } = useSettings();
   const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals } = useQueueTimers(activeBooking, queue, services, breaks);
 
   const [formData, setFormData] = useState({
@@ -55,11 +64,23 @@ export default function ClientPanel() {
     }
     
     const [year, month, day] = formData.scheduledDate.split('-').map(Number);
-    const slots = [];
-    for (let h = 9; h <= 20; h++) {
-        for (let m = 0; m < 60; m += 30) {
-            slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
-        }
+    // get day of week (0 = Sunday, 1 = Monday ...)
+    const jsDate = new Date(year, month - 1, day);
+    const dayOfWeek = jsDate.getDay();
+
+    let slots = [];
+    if (scheduleHours && scheduleHours[dayOfWeek] && Array.isArray(scheduleHours[dayOfWeek])) {
+      slots = [...scheduleHours[dayOfWeek]];
+    } else if (scheduleHours && Array.isArray(scheduleHours)) {
+      // backward compatibility if it's still a flat array in DB
+      slots = [...scheduleHours];
+    } else {
+      // Default to standard slots if missing
+      for (let h = 9; h <= 20; h++) {
+          for (let m = 0; m < 60; m += 30) {
+              slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+          }
+      }
     }
     
     const occupied = Object.values(queueIntervals);
@@ -123,7 +144,7 @@ export default function ClientPanel() {
     const isScheduled = formType === 'scheduled';
 
     if (!isOpen && !isScheduled) {
-      toast.error('A barbearia está fechada no momento. Mas você ainda pode agendar um horário.');
+      toast.error('A fila da barbearia está fechada no momento.');
       return;
     }
     if (!formData.name || !formData.whatsapp) {
@@ -161,7 +182,7 @@ export default function ClientPanel() {
         toast.error('Por favor, informe o horário do agendamento.');
         return;
       }
-      let expectedPrice = 0;
+      let expectedPrice = formType === 'scheduled' ? schedulingFee : 0;
       formData.serviceIds.forEach(sName => {
         const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
         if (s) {
@@ -183,7 +204,20 @@ export default function ClientPanel() {
       });
       localStorage.setItem('myBookingId', docRef.id);
       setMyBookingId(docRef.id);
-      toast.success(isScheduled ? 'Horário agendado!' : 'Você entrou na fila!');
+      
+      if (isScheduled) {
+        setReceipt({
+          clientName: formData.name,
+          services: formData.serviceIds.join(', '),
+          total: expectedPrice,
+          fee: schedulingFee,
+          date: formData.scheduledDate.split('-').reverse().join('/'),
+          time: formData.scheduledTime,
+        });
+      } else {
+        toast.success('Você entrou na fila!');
+      }
+
       setShowJoinForm(false);
       setFormData(prev => ({...prev, name: '', whatsapp: '', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0]}));
     } catch (err) {
@@ -552,8 +586,19 @@ export default function ClientPanel() {
               ENTRAR NA FILA AGORA
             </button>
           ) : (
-            <div className="w-full max-w-md mx-auto bg-red-500/10 border border-red-500/20 text-red-500 font-bold py-4 rounded-xl flex items-center justify-center gap-2">
-              BARBEARIA FECHADA
+            <div className="w-full max-w-md mx-auto flex flex-col gap-2">
+              <div className="bg-red-500/10 border border-red-500/20 text-red-500 font-bold py-2 rounded-xl flex items-center justify-center text-sm">
+                Fila presencial fechada hoje.
+              </div>
+              <button 
+                onClick={() => {
+                  setFormType('scheduled');
+                  setShowJoinForm(true);
+                }}
+                className="w-full bg-gold hover:bg-gold-light text-carbon font-bold py-4 rounded-xl shadow-xl transition-all"
+              >
+                AGENDAR HORÁRIO
+              </button>
             </div>
           )}
         </div>
@@ -717,15 +762,22 @@ export default function ClientPanel() {
                 </div>
 
                 {formData.serviceIds.length > 0 && (
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex justify-between items-center">
-                    <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
-                    <span className="text-gold font-bold text-xl">
-                      R$ {formData.serviceIds.reduce((acc, sName) => {
-                        const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
-                        if (!s) return acc;
-                        return acc + getServicePrice(s);
-                      }, 0).toFixed(2)}
-                    </span>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex flex-col gap-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
+                      <span className="text-gold font-bold text-xl">
+                        R$ {formData.serviceIds.reduce((acc, sName) => {
+                          const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+                          if (!s) return acc;
+                          return acc + getServicePrice(s);
+                        }, formType === 'scheduled' ? schedulingFee : 0).toFixed(2)}
+                      </span>
+                    </div>
+                    {formType === 'scheduled' && schedulingFee > 0 && (
+                      <span className="text-white/40 text-xs text-right">
+                        Inclui taxa de agendamento (R$ {schedulingFee.toFixed(2)})
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -821,6 +873,104 @@ export default function ClientPanel() {
         )}
       </AnimatePresence>
 
+      {/* Receipt Modal */}
+      <AnimatePresence>
+        {receipt && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-center items-center p-4"
+          >
+            <motion.div 
+              initial={{ y: 200, scale: 0.9 }}
+              animate={{ y: 0, scale: 1 }}
+              exit={{ y: 200, scale: 0.9 }}
+              className="bg-carbon-light rounded-2xl p-6 border border-white/10 w-full max-w-sm max-h-[90vh] overflow-y-auto overflow-x-hidden relative"
+            >
+              <button 
+                onClick={() => setReceipt(null)}
+                className="absolute top-4 right-4 text-white/40 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              
+              <div className="text-center mb-6 mt-2">
+                <div className="w-12 h-12 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <Check className="w-6 h-6" />
+                </div>
+                <h2 className="text-2xl font-display font-bold text-white">Horário Agendado!</h2>
+                <p className="text-white/60 text-sm mt-1">Detalhes da reserva</p>
+              </div>
+
+              <div className="bg-carbon border border-white/5 rounded-xl p-4 space-y-3 font-mono text-sm mb-6">
+                <div className="flex justify-between border-b border-white/5 pb-2">
+                  <span className="text-white/40">Cliente:</span>
+                  <span className="text-white text-right font-medium">{receipt.clientName}</span>
+                </div>
+                <div className="flex justify-between border-b border-white/5 pb-2">
+                  <span className="text-white/40">Serviços:</span>
+                  <span className="text-white text-right max-w-[150px] truncate">{receipt.services}</span>
+                </div>
+                <div className="flex justify-between border-b border-white/5 pb-2">
+                  <span className="text-white/40">Data:</span>
+                  <span className="text-gold font-medium">{receipt.date} às {receipt.time}</span>
+                </div>
+                {receipt.fee > 0 && (
+                 <div className="flex justify-between border-b border-white/5 pb-2 items-center">
+                    <span className="text-white/60 text-xs">Taxa de Reserva:</span>
+                    <span className="text-red-400 font-bold text-xs">R$ {receipt.fee.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-2">
+                  <span className="text-white/60">Total Estimado*:</span>
+                  <span className="text-white font-bold text-lg">R$ {receipt.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-white/40 text-center mb-6 leading-relaxed">
+                *O valor final pode variar dependendo no local. Uma taxa de agendamento está inclusa (se aplicável), e deverá ser paga junto com o serviço no local. A perda do horário implica no não reembolso de taxas.
+              </p>
+
+              <div className="space-y-3">
+                <a 
+                  href={`https://wa.me/5581992941597?text=${encodeURIComponent(`💇‍♂️ *Novo Agendamento*\n\n*Cliente:* ${receipt.clientName}\n*Serviços:* ${receipt.services}\n*Data:* ${receipt.date} às ${receipt.time}\n*Total Estimado:* R$ ${receipt.total.toFixed(2)}${receipt.fee > 0 ? `\n\n*(Taxa de reserva de R$ ${receipt.fee.toFixed(2)} incluída)*` : ''}\n\nTe vejo lá!`)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                  onClick={() => setReceipt(null)}
+                >
+                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.878-.788-1.487-1.761-1.66-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/>
+                  </svg>
+                  Compartilhar no WhatsApp
+                </a>
+                <button 
+                  onClick={() => setReceipt(null)}
+                  className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3.5 rounded-xl transition-colors text-sm"
+                >
+                  Fechar
+                </button>
+              </div>
+
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating WhatsApp Contact Button */}
+      <a
+        href="https://wa.me/5581992941597"
+        target="_blank"
+        rel="noreferrer"
+        className="fixed bottom-28 sm:bottom-6 right-4 sm:right-6 z-40 bg-[#25D366] hover:bg-[#128C7E] text-white p-3.5 sm:p-4 rounded-full shadow-lg shadow-[#25D366]/20 transition-transform hover:scale-110 flex items-center justify-center animate-bounce-subtle"
+        aria-label="Fale conosco no WhatsApp"
+        title="Dúvidas? Fale conosco!"
+      >
+        <svg className="w-6 h-6 sm:w-7 sm:h-7 fill-current" viewBox="0 0 24 24">
+          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.878-.788-1.487-1.761-1.66-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/>
+        </svg>
+      </a>
     </div>
   );
 }

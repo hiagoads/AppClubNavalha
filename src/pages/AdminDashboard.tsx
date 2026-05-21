@@ -370,14 +370,14 @@ export default function AdminDashboard() {
       {/* Mobile Top Bar */}
       <div className="md:hidden bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h2 className="text-sm font-sans font-bold tracking-widest copper-text uppercase">Club</h2>
             <button
               onClick={() => toggleOpenStatus(isOpen)}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${isOpen ? 'bg-green-500/10 border-green-500/30 text-green-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}
             >
               <div className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]'}`}></div>
-              <span className="text-[10px] font-bold uppercase tracking-wider">{isOpen ? 'Aberta' : 'Fechada'}</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">{isOpen ? 'Fila' : 'Fila'}</span>
             </button>
           </div>
           <h1 className="text-xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none">
@@ -407,19 +407,21 @@ export default function AdminDashboard() {
             • Barbearia •
           </p>
 
-          <div className="mt-4 flex items-center justify-between bg-white/5 border border-white/10 rounded-lg p-2.5">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`}></div>
-              <span className="text-xs font-bold uppercase tracking-wider text-white/70">
-                {isOpen ? 'Aberta' : 'Fechada'}
-              </span>
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="flex items-center justify-between bg-white/5 border border-white/10 rounded-lg p-2.5">
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`}></div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-white/70">
+                  {isOpen ? 'Fila: Aberta' : 'Fila: Fechada'}
+                </span>
+              </div>
+              <button
+                onClick={() => toggleOpenStatus(isOpen)}
+                className={`text-[9px] px-2 py-1 rounded tracking-wider uppercase font-bold transition-colors ${isOpen ? 'bg-white/10 text-white hover:bg-red-500/20 hover:text-red-400' : 'bg-gold/20 text-gold hover:bg-green-500/20 hover:text-green-400'}`}
+              >
+                {isOpen ? 'Fechar' : 'Abrir'}
+              </button>
             </div>
-            <button
-              onClick={() => toggleOpenStatus(isOpen)}
-              className={`text-[9px] px-2 py-1 rounded tracking-wider uppercase font-bold transition-colors ${isOpen ? 'bg-white/10 text-white hover:bg-red-500/20 hover:text-red-400' : 'bg-gold/20 text-gold hover:bg-green-500/20 hover:text-green-400'}`}
-            >
-              {isOpen ? 'Fechar' : 'Abrir'}
-            </button>
           </div>
         </div>
 
