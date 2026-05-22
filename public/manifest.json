@@ -1,13 +1,7 @@
 {
-  "short_name": "Barbearia",
-  "name": "Fila Barbearia Premium",
+  "short_name": "CLUBNAVALHA",
+  "name": "CLUBNAVALHA",
   "icons": [
-    {
-      "src": "/logo.svg",
-      "type": "image/svg+xml",
-      "sizes": "any",
-      "purpose": "any maskable"
-    },
     {
       "src": "/logo192.png",
       "type": "image/png",
