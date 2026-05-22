@@ -412,7 +412,7 @@ export default function AdminDashboard() {
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`}></div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-white/70">
-                  {isOpen ? 'Fila: Aberta' : 'Fila: Fechada'}
+                  {isOpen ? 'Aberta' : 'Fechada'}
                 </span>
               </div>
               <button

@@ -138,13 +138,35 @@ export function useQueueTimers(
       return current;
   };
 
-  const scheduledBookings = queue.filter(b => b.type === 'scheduled').sort((a,b) => getSchedTime(a) - getSchedTime(b));
-  const walkins = queue.filter(b => b.type !== 'scheduled').sort((a,b) => getMillis(a.createdAt) - getMillis(b.createdAt));
+  const manualItems = queue.filter(b => b.priority !== undefined).sort((a,b) => a.priority! - b.priority!);
+  const autoScheduled = queue.filter(b => b.type === 'scheduled' && b.priority === undefined).sort((a,b) => getSchedTime(a) - getSchedTime(b));
+  const autoWalkins = queue.filter(b => b.type !== 'scheduled' && b.priority === undefined).sort((a,b) => getMillis(a.createdAt) - getMillis(b.createdAt));
 
-  let simTimeForScheduled = currentSimulationTime;
-  for (const sb of scheduledBookings) {
+  let simTimeForAutomated = currentSimulationTime;
+
+  for (const mb of manualItems) {
+      const durationMs = getDuration(mb) * 60000;
+      let proposedStart: number;
+      if (mb.type === 'scheduled') {
+          proposedStart = Math.max(simTimeForAutomated, getSchedTime(mb));
+      } else {
+          proposedStart = simTimeForAutomated;
+      }
+      
+      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
+      const actualEnd = actualStart + durationMs;
+
+      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: mb.id });
+      exactStartTimes[mb.id] = actualStart;
+      queueWaitTimes[mb.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
+      queueIntervals[mb.id] = { start: actualStart, end: actualEnd };
+
+      simTimeForAutomated = actualEnd; // CRITICAL: enforce sequential timeline for manually ordered items
+  }
+
+  for (const sb of autoScheduled) {
       const durationMs = getDuration(sb) * 60000;
-      let proposedStart = Math.max(simTimeForScheduled, getSchedTime(sb));
+      let proposedStart = Math.max(simTimeForAutomated, getSchedTime(sb));
       
       const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
       const actualEnd = actualStart + durationMs;
@@ -154,10 +176,10 @@ export function useQueueTimers(
       queueWaitTimes[sb.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
       queueIntervals[sb.id] = { start: actualStart, end: actualEnd };
 
-      simTimeForScheduled = actualEnd;
+      simTimeForAutomated = actualEnd;
   }
 
-  for (const wk of walkins) {
+  for (const wk of autoWalkins) {
       const durationMs = getDuration(wk) * 60000;
       let proposedStart = Math.max(currentSimulationTime, getMillis(wk.createdAt));
       
@@ -171,6 +193,13 @@ export function useQueueTimers(
   }
 
   const sortedQueue = [...queue].sort((a, b) => {
+      // If BOTH items have explicit priority set (i.e. part of a manual sort block),
+      // they MUST be sorted visually by that priority to strictly enforce the admin's drag UI.
+      if (a.priority !== undefined && b.priority !== undefined) {
+         return a.priority - b.priority;
+      }
+      
+      // Otherwise fallback to their true starting time sequence
       const timeDiff = exactStartTimes[a.id] - exactStartTimes[b.id];
       if (timeDiff !== 0) return timeDiff;
       if (a.type === 'scheduled' && b.type !== 'scheduled') return -1;
