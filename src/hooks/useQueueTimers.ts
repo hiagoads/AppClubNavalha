@@ -115,42 +115,68 @@ export function useQueueTimers(
   let currentSimulationTime = now + (activeRemainingMinutes * 60000);
   const queueWaitTimes: Record<string, number> = {};
   const queueIntervals: Record<string, { start: number; end: number }> = {};
-  let remainingBreaks = [...breaks].sort((a,b) => a.startTime - b.startTime);
-
-  // Single unified sorted queue
-  const sortedQueue = [...queue].sort((a, b) => getPriority(a) - getPriority(b));
-
-  for (let i = 0; i < sortedQueue.length; i++) {
-    const picked = sortedQueue[i];
-
-    let changed = true;
-    while(changed) {
-      changed = false;
-      for (let j = 0; j < remainingBreaks.length; j++) {
-        const b = remainingBreaks[j];
-        const breakEnd = b.startTime + (b.duration * 60000);
-        if (currentSimulationTime >= b.startTime && currentSimulationTime < breakEnd) {
-          currentSimulationTime = breakEnd;
-          changed = true;
-          remainingBreaks.splice(j, 1);
-          break;
-        }
-      }
-    }
-
-    let startTimeForWait: number;
-    if (picked.type === 'scheduled') {
-      const sTime = getSchedTime(picked);
-      startTimeForWait = Math.max(currentSimulationTime, sTime);
-    } else {
-      startTimeForWait = Math.max(currentSimulationTime, getMillis(picked.createdAt));
-    }
-
-    const itemDuration = getDuration(picked) * 60000;
-    queueWaitTimes[picked.id] = Math.max(0, Math.floor((startTimeForWait - now) / 60000));
-    queueIntervals[picked.id] = { start: startTimeForWait, end: startTimeForWait + itemDuration };
-    currentSimulationTime = startTimeForWait + itemDuration;
+  const exactStartTimes: Record<string, number> = {};
+  
+  const occupiedIntervals: { start: number; end: number; id: string }[] = [];
+  
+  for (const b of breaks) {
+      occupiedIntervals.push({ start: b.startTime, end: b.startTime + (b.duration * 60000), id: b.id });
   }
+
+  const findNextGap = (start: number, duration: number, existingIntervals: {start: number, end: number}[]) => {
+      let current = start;
+      let changed = true;
+      while (changed) {
+          changed = false;
+          for (const inv of existingIntervals) {
+              if (current < inv.end && current + duration > inv.start) {
+                  current = inv.end;
+                  changed = true;
+              }
+          }
+      }
+      return current;
+  };
+
+  const scheduledBookings = queue.filter(b => b.type === 'scheduled').sort((a,b) => getSchedTime(a) - getSchedTime(b));
+  const walkins = queue.filter(b => b.type !== 'scheduled').sort((a,b) => getMillis(a.createdAt) - getMillis(b.createdAt));
+
+  let simTimeForScheduled = currentSimulationTime;
+  for (const sb of scheduledBookings) {
+      const durationMs = getDuration(sb) * 60000;
+      let proposedStart = Math.max(simTimeForScheduled, getSchedTime(sb));
+      
+      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
+      const actualEnd = actualStart + durationMs;
+
+      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: sb.id });
+      exactStartTimes[sb.id] = actualStart;
+      queueWaitTimes[sb.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
+      queueIntervals[sb.id] = { start: actualStart, end: actualEnd };
+
+      simTimeForScheduled = actualEnd;
+  }
+
+  for (const wk of walkins) {
+      const durationMs = getDuration(wk) * 60000;
+      let proposedStart = Math.max(currentSimulationTime, getMillis(wk.createdAt));
+      
+      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
+      const actualEnd = actualStart + durationMs;
+
+      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: wk.id });
+      exactStartTimes[wk.id] = actualStart;
+      queueWaitTimes[wk.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
+      queueIntervals[wk.id] = { start: actualStart, end: actualEnd };
+  }
+
+  const sortedQueue = [...queue].sort((a, b) => {
+      const timeDiff = exactStartTimes[a.id] - exactStartTimes[b.id];
+      if (timeDiff !== 0) return timeDiff;
+      if (a.type === 'scheduled' && b.type !== 'scheduled') return -1;
+      if (a.type !== 'scheduled' && b.type === 'scheduled') return 1;
+      return 0;
+  });
 
   return { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue };
 }
