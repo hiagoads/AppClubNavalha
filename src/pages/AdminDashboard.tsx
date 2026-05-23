@@ -377,7 +377,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${isOpen ? 'bg-green-500/10 border-green-500/30 text-green-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}
             >
               <div className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]'}`}></div>
-              <span className="text-[10px] font-bold uppercase tracking-wider">{isOpen ? 'Fila' : 'Fila'}</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">{isOpen ? 'ABERTO' : 'FECHADO'}</span>
             </button>
           </div>
           <h1 className="text-xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none">
