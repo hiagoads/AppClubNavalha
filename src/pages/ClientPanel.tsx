@@ -20,8 +20,11 @@ export const getServicePrice = (s: any) => {
   return (promo > 0) ? promo : reg;
 };
 
+import { useBarbers } from '../hooks/useBarbers';
+
 export default function ClientPanel() {
   const { queue, activeBooking, loading } = useQueue();
+  const { barbers } = useBarbers();
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [formType, setFormType] = useState<'walk-in' | 'scheduled'>('walk-in');
   const [showMenu, setShowMenu] = useState(false);
@@ -548,7 +551,10 @@ export default function ClientPanel() {
                       <div className="flex items-center justify-between gap-3 flex-wrap">
                         <div className="flex items-center gap-2 text-[10px] sm:text-xs text-white/40">
                           {booking.barberId !== 'any' && (
-                             <span className="truncate">VIP</span>
+                             <span className="truncate bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-white/70 font-bold flex items-center gap-1">
+                               <Scissors className="w-2.5 h-2.5" />
+                               {barbers.find(b => b.id === booking.barberId)?.name || 'Específico'}
+                             </span>
                           )}
                           <span className="flex items-center gap-1 text-gold/70 font-bold bg-gold/10 px-1.5 py-0.5 rounded whitespace-nowrap">
                             <Clock className="w-3 h-3 shrink-0" />
@@ -675,6 +681,9 @@ export default function ClientPanel() {
                       className="w-full bg-carbon border border-white/10 rounded-xl py-2.5 px-3 focus:outline-none focus:ring-1 focus:ring-gold/50 text-white text-sm"
                     >
                       <option value="any" className="bg-carbon text-white">Qualquer um</option>
+                      {barbers.filter(b => b.isActive).map(barber => (
+                        <option key={barber.id} value={barber.id} className="bg-carbon text-white">{barber.name}</option>
+                      ))}
                     </select>
                   </div>
                   {formType === 'scheduled' && (

@@ -10,6 +10,7 @@ import { BookingStatus } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
 import BillingView from '../components/BillingView';
+import { BarbersManager } from '../components/BarbersManager';
 import ServicesManager from '../components/ServicesManager';
 import { GlobalSettings } from '../components/GlobalSettings';
 import { formatTime, parsePrice } from '../utils';
@@ -37,9 +38,12 @@ import toast from 'react-hot-toast';
 import { useHistory } from '../hooks/useHistory';
 import { HistoryView } from '../components/HistoryView';
 
+import { useBarbers } from '../hooks/useBarbers';
+
 export default function AdminDashboard() {
   const { queue, activeBooking, loading } = useQueue();
   const { services } = useServices();
+  const { barbers } = useBarbers();
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus } = useSettings();
   const queueTimers = useQueueTimers(activeBooking, queue, services, breaks);
@@ -57,6 +61,7 @@ export default function AdminDashboard() {
     name: '',
     whatsapp: '',
     serviceIds: [] as string[],
+    barberId: 'any',
     type: 'walk-in',
     scheduledTime: '',
     scheduledDate: new Date().toISOString().split('T')[0],
@@ -99,7 +104,7 @@ export default function AdminDashboard() {
         clientName: newClientData.name,
         clientWhatsapp: newClientData.whatsapp,
         serviceId: newClientData.serviceIds.join(', '),
-        barberId: 'any',
+        barberId: newClientData.barberId,
         type: newClientData.type,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
@@ -107,7 +112,7 @@ export default function AdminDashboard() {
       });
       toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
       setIsAddingClient(false);
-      setNewClientData({ name: '', whatsapp: '', serviceIds: [], type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
+      setNewClientData({ name: '', whatsapp: '', serviceIds: [], barberId: 'any', type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
     } catch(err) {
       toast.error('Erro ao adicionar cliente');
     }
@@ -629,6 +634,20 @@ export default function AdminDashboard() {
                         required
                       />
                     </div>
+                    
+                    <div className="space-y-2">
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Barbeiro</label>
+                      <select
+                        value={newClientData.barberId}
+                        onChange={(e) => setNewClientData({ ...newClientData, barberId: e.target.value })}
+                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
+                      >
+                        <option value="any">Qualquer um</option>
+                        {barbers.filter(b => b.isActive).map(barber => (
+                          <option key={barber.id} value={barber.id}>{barber.name}</option>
+                        ))}
+                      </select>
+                    </div>
 
                     {newClientData.type === 'scheduled' && (
                       <div className="grid grid-cols-2 gap-4">
@@ -779,7 +798,13 @@ export default function AdminDashboard() {
                       </div>
                       <div>
                         <h3 className="text-2xl font-display font-bold">{activeBooking.clientName}</h3>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {activeBooking.barberId !== 'any' && (
+                            <span className="truncate bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-white/70 font-bold flex items-center gap-1 text-[10px]">
+                              <Scissors className="w-2 h-2" />
+                              {barbers.find(b => b.id === activeBooking.barberId)?.name || 'Específico'}
+                            </span>
+                          )}
                           <p className="text-gold text-sm font-medium">{activeBooking.serviceId}</p>
                           <button onClick={() => setEditingServicesBooking({id: activeBooking.id, services: activeBooking.serviceId.split(', ')})} className="text-white/40 hover:text-white p-1">
                             <Edit2 className="w-3 h-3" />
@@ -877,7 +902,13 @@ export default function AdminDashboard() {
                         </div>
 
                         <div className="flex flex-col gap-3 pl-7 sm:pl-10">
-                          <div className="flex items-center gap-2 text-[10px] sm:text-xs text-white/40">
+                          <div className="flex items-center gap-2 text-[10px] sm:text-xs text-white/40 flex-wrap">
+                            {item.barberId !== 'any' && (
+                              <span className="truncate bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-white/70 font-bold flex items-center gap-1">
+                                <Scissors className="w-2.5 h-2.5" />
+                                {barbers.find(b => b.id === item.barberId)?.name || 'Específico'}
+                              </span>
+                            )}
                             <span className="truncate">{item.clientWhatsapp}</span>
                             <span className="hidden sm:inline">•</span>
                             <span className="flex items-center gap-1 text-gold/70 font-bold bg-gold/10 px-1.5 py-0.5 rounded whitespace-nowrap">
@@ -964,12 +995,7 @@ export default function AdminDashboard() {
 
         {activeTab === 'services' && <ServicesManager />}
 
-        {activeTab === 'barbers' && (
-          <div className="py-20 text-center opacity-30">
-            <Scissors className="w-12 h-12 mx-auto mb-4" />
-            <p>Módulo de gestão de barbeiros em breve</p>
-          </div>
-        )}
+        {activeTab === 'barbers' && <BarbersManager />}
       </main>
     </div>
   );
