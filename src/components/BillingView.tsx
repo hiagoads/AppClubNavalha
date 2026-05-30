@@ -381,8 +381,8 @@ export default function BillingView() {
       </div>
 
       {selectedClient && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="glass-card bg-carbon-light border border-white/10 rounded-2xl w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex p-4 pb-20 z-50 overflow-y-auto">
+          <div className="m-auto glass-card bg-carbon-light border border-white/10 rounded-2xl w-full max-w-lg p-6 relative">
             <button 
               onClick={() => {
                 setSelectedClient(null);

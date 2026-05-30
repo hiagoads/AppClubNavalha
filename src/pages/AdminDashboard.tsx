@@ -13,6 +13,7 @@ import BillingView from '../components/BillingView';
 import { BarbersManager } from '../components/BarbersManager';
 import ServicesManager from '../components/ServicesManager';
 import { GlobalSettings } from '../components/GlobalSettings';
+import QueueLogView from '../components/QueueLogView';
 import { formatTime, parsePrice } from '../utils';
 import { 
   Play, 
@@ -48,13 +49,13 @@ export default function AdminDashboard() {
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus, schedulingFee } = useSettings();
   const queueTimers = useQueueTimers(activeBooking, queue, services, breaks);
-  const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = queueTimers;
+  const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes } = queueTimers;
   useNotifications(queue, activeBooking);
 
   const getServicePrice = (s: any) => {
     return parsePrice(s.promoPrice) > 0 ? parsePrice(s.promoPrice) : parsePrice(s.price);
   };
-  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings' | 'log'>('queue');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
   const [isAddingBreak, setIsAddingBreak] = useState(false);
@@ -112,12 +113,18 @@ export default function AdminDashboard() {
       }
     });
 
+    let finalBarberId = newClientData.barberId;
+    const activeBarbers = barbers.filter(b => b.isActive);
+    if (finalBarberId === 'any' && activeBarbers.length === 1) {
+      finalBarberId = activeBarbers[0].id;
+    }
+
     try {
       await addDoc(collection(db, 'bookings'), {
         clientName: newClientData.name,
         clientWhatsapp: newClientData.whatsapp,
         serviceId: newClientData.serviceIds.join(', '),
-        barberId: newClientData.barberId,
+        barberId: finalBarberId,
         type: newClientData.type,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
@@ -463,6 +470,9 @@ export default function AdminDashboard() {
           <button onClick={() => { setActiveTab('queue'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
             <NavItem icon={<Users />} label="Fila" active={activeTab === 'queue'} />
           </button>
+          <button onClick={() => { setActiveTab('log'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
+            <NavItem icon={<History />} label="Controle de Tabela" active={activeTab === 'log'} />
+          </button>
           <button onClick={() => { setActiveTab('billing'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
             <NavItem icon={<BarChart3 />} label="Faturamento" active={activeTab === 'billing'} />
           </button>
@@ -609,8 +619,8 @@ export default function AdminDashboard() {
             )}
 
             {isAddingClient && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                <div className="glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-md relative max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in duration-200">
+              <div className="fixed inset-0 z-50 flex p-4 pb-20 bg-black/60 backdrop-blur-sm overflow-y-auto">
+                <div className="m-auto glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-md relative animate-in fade-in zoom-in duration-200">
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold font-display silver-text-gradient">
                       Novo Cliente na Fila
@@ -785,8 +795,8 @@ export default function AdminDashboard() {
 
             {/* Edit Services Modal */}
             {editingServicesBooking && (
-              <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto">
+              <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex p-4 pb-20 overflow-y-auto">
+                <div className="m-auto bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
                   <button 
                     onClick={() => setEditingServicesBooking(null)}
                     className="absolute top-4 right-4 text-white/40 hover:text-white"
@@ -1071,6 +1081,8 @@ export default function AdminDashboard() {
 
         {activeTab === 'billing' && <BillingView />}
         
+        {activeTab === 'log' && <QueueLogView queue={queue} sortedQueue={sortedQueue} exactStartTimes={exactStartTimes} />}
+
         {activeTab === 'history' && <HistoryView />}
 
         {activeTab === 'settings' && <GlobalSettings />}

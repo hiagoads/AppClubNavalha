@@ -193,12 +193,18 @@ export default function ClientPanel() {
         }
       });
 
+      let finalBarberId = formData.barberId;
+      const activeBarbers = barbers.filter(b => b.isActive);
+      if (finalBarberId === 'any' && activeBarbers.length === 1) {
+        finalBarberId = activeBarbers[0].id;
+      }
+
       const docRef = await addDoc(collection(db, 'bookings'), {
         clientName: formData.name,
         clientWhatsapp: formData.whatsapp,
         serviceId: formData.serviceIds.join(', '),
         expectedPrice: expectedPrice,
-        barberId: formData.barberId,
+        barberId: finalBarberId,
         type: isScheduled ? BookingType.SCHEDULED : BookingType.WALK_IN,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),

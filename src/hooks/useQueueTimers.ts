@@ -137,54 +137,18 @@ export function useQueueTimers(
       return current;
   };
 
-  // 1. Process scheduled items first so they anchor to their times
-  const scheduledItems = queue.filter(b => b.type === 'scheduled').sort((a,b) => {
-      // If manually reordered among themselves, respect that
-      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
-      return getSchedTime(a) - getSchedTime(b);
-  });
-  
-  for (const sb of scheduledItems) {
-      const durationMs = getDuration(sb) * 60000;
-      let proposedStart = Math.max(currentSimTime, getSchedTime(sb));
-      
-      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
-      const actualEnd = actualStart + durationMs;
-
-      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: sb.id });
-      exactStartTimes[sb.id] = actualStart;
-      queueWaitTimes[sb.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
-      queueIntervals[sb.id] = { start: actualStart, end: actualEnd };
-  }
-
-  // 2. Process walk-ins, filling the gaps
-  const walkinItems = queue.filter(b => b.type !== 'scheduled').sort((a,b) => {
-      // Respect manual reordering priority for walkins
-      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
-      if (a.priority !== undefined) return -1;
-      if (b.priority !== undefined) return 1;
-      
-      return getMillis(a.createdAt) - getMillis(b.createdAt);
-  });
-
-  for (const wk of walkinItems) {
-      const durationMs = getDuration(wk) * 60000;
-      // Walk-ins always look for the earliest possible gap from currentSimTime!
-      let proposedStart = currentSimTime;
-      
-      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
-      const actualEnd = actualStart + durationMs;
-
-      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: wk.id });
-      exactStartTimes[wk.id] = actualStart;
-      queueWaitTimes[wk.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
-      queueIntervals[wk.id] = { start: actualStart, end: actualEnd };
-  }
-
+  // 1. Determine solid strict order first
   const sortedQueue = [...queue].sort((a, b) => {
-      // Sort purely by their effectively calculated start times!
-      const timeDiff = exactStartTimes[a.id] - exactStartTimes[b.id];
-      if (timeDiff !== 0) return timeDiff;
+      // Manually sorted fully overrides
+      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
+      if (a.priority !== undefined && b.priority === undefined) return -1;
+      if (a.priority === undefined && b.priority !== undefined) return 1;
+
+      // Sort by chronological time target
+      const aTime = a.type === 'scheduled' ? getSchedTime(a) : getMillis(a.createdAt);
+      const bTime = b.type === 'scheduled' ? getSchedTime(b) : getMillis(b.createdAt);
+
+      if (aTime !== bTime) return aTime - bTime;
       
       // Fallback
       if (a.type === 'scheduled' && b.type !== 'scheduled') return -1;
@@ -192,5 +156,27 @@ export function useQueueTimers(
       return 0;
   });
 
-  return { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue };
+  // 2. Compute exactStartTimes sequentially based entirely on this strict sorted order
+  let simTimeSequential = currentSimTime;
+  for (const item of sortedQueue) {
+      const durationMs = getDuration(item) * 60000;
+      
+      let proposedStart = simTimeSequential;
+      if (item.type === 'scheduled') {
+          // A scheduled item won't be pushed BEFORE its officially scheduled time
+          proposedStart = Math.max(simTimeSequential, getSchedTime(item));
+      }
+      
+      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
+      const actualEnd = actualStart + durationMs;
+
+      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: item.id });
+      exactStartTimes[item.id] = actualStart;
+      queueWaitTimes[item.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
+      queueIntervals[item.id] = { start: actualStart, end: actualEnd };
+
+      simTimeSequential = actualEnd; // Always sequentially accumulate
+  }
+
+  return { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes };
 }
