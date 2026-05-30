@@ -610,7 +610,7 @@ export default function AdminDashboard() {
 
             {isAddingClient && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                <div className="glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-md relative animate-in fade-in zoom-in duration-200">
+                <div className="glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-md relative max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in duration-200">
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold font-display silver-text-gradient">
                       Novo Cliente na Fila
@@ -786,7 +786,7 @@ export default function AdminDashboard() {
             {/* Edit Services Modal */}
             {editingServicesBooking && (
               <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+                <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto">
                   <button 
                     onClick={() => setEditingServicesBooking(null)}
                     className="absolute top-4 right-4 text-white/40 hover:text-white"

@@ -137,34 +137,16 @@ export function useQueueTimers(
       return current;
   };
 
-  const manualItems = queue.filter(b => b.priority !== undefined).sort((a,b) => a.priority! - b.priority!);
-  const autoScheduled = queue.filter(b => b.type === 'scheduled' && b.priority === undefined).sort((a,b) => getSchedTime(a) - getSchedTime(b));
-  const autoWalkins = queue.filter(b => b.type !== 'scheduled' && b.priority === undefined).sort((a,b) => getMillis(a.createdAt) - getMillis(b.createdAt));
-
-  let simTimeForAutomated = currentSimTime;
-
-  for (const mb of manualItems) {
-      const durationMs = getDuration(mb) * 60000;
-      let proposedStart = simTimeForAutomated;
-      if (mb.type === 'scheduled') {
-          proposedStart = Math.max(simTimeForAutomated, getSchedTime(mb));
-      }
-      
-      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
-      const actualEnd = actualStart + durationMs;
-
-      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: mb.id });
-      exactStartTimes[mb.id] = actualStart;
-      queueWaitTimes[mb.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
-      queueIntervals[mb.id] = { start: actualStart, end: actualEnd };
-
-      simTimeForAutomated = actualEnd; // CRITICAL: enforce sequential timeline for manually ordered items
-  }
-
-  // Anchor autoScheduled
-  for (const sb of autoScheduled) {
+  // 1. Process scheduled items first so they anchor to their times
+  const scheduledItems = queue.filter(b => b.type === 'scheduled').sort((a,b) => {
+      // If manually reordered among themselves, respect that
+      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
+      return getSchedTime(a) - getSchedTime(b);
+  });
+  
+  for (const sb of scheduledItems) {
       const durationMs = getDuration(sb) * 60000;
-      let proposedStart = Math.max(simTimeForAutomated, getSchedTime(sb));
+      let proposedStart = Math.max(currentSimTime, getSchedTime(sb));
       
       const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
       const actualEnd = actualStart + durationMs;
@@ -175,10 +157,20 @@ export function useQueueTimers(
       queueIntervals[sb.id] = { start: actualStart, end: actualEnd };
   }
 
-  // AutoWalkins fall into gaps!
-  for (const wk of autoWalkins) {
+  // 2. Process walk-ins, filling the gaps
+  const walkinItems = queue.filter(b => b.type !== 'scheduled').sort((a,b) => {
+      // Respect manual reordering priority for walkins
+      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
+      if (a.priority !== undefined) return -1;
+      if (b.priority !== undefined) return 1;
+      
+      return getMillis(a.createdAt) - getMillis(b.createdAt);
+  });
+
+  for (const wk of walkinItems) {
       const durationMs = getDuration(wk) * 60000;
-      let proposedStart = Math.max(simTimeForAutomated, getMillis(wk.createdAt));
+      // Walk-ins always look for the earliest possible gap from currentSimTime!
+      let proposedStart = currentSimTime;
       
       const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
       const actualEnd = actualStart + durationMs;
@@ -190,16 +182,11 @@ export function useQueueTimers(
   }
 
   const sortedQueue = [...queue].sort((a, b) => {
-      // 1. Manually sorted
-      if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
-      if (a.priority !== undefined) return -1;
-      if (b.priority !== undefined) return 1;
-
-      // 2. Sort by their effectively calculated start times!
+      // Sort purely by their effectively calculated start times!
       const timeDiff = exactStartTimes[a.id] - exactStartTimes[b.id];
       if (timeDiff !== 0) return timeDiff;
       
-      // 3. Fallback: scheduled > string created at
+      // Fallback
       if (a.type === 'scheduled' && b.type !== 'scheduled') return -1;
       if (a.type !== 'scheduled' && b.type === 'scheduled') return 1;
       return 0;
