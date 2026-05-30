@@ -6,7 +6,7 @@ import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { db, auth } from '../lib/firebase';
 import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField } from 'firebase/firestore';
-import { BookingStatus } from '../types';
+import { BookingStatus, Booking } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
 import BillingView from '../components/BillingView';
@@ -31,7 +31,8 @@ import {
   Menu,
   X,
   Edit2,
-  History
+  History,
+  AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -45,10 +46,14 @@ export default function AdminDashboard() {
   const { services } = useServices();
   const { barbers } = useBarbers();
   const { breaks } = useBreaks();
-  const { isOpen, toggleOpenStatus } = useSettings();
+  const { isOpen, toggleOpenStatus, schedulingFee } = useSettings();
   const queueTimers = useQueueTimers(activeBooking, queue, services, breaks);
   const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue } = queueTimers;
   useNotifications(queue, activeBooking);
+
+  const getServicePrice = (s: any) => {
+    return parsePrice(s.promoPrice) > 0 ? parsePrice(s.promoPrice) : parsePrice(s.price);
+  };
   const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings'>('queue');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
@@ -419,6 +424,10 @@ export default function AdminDashboard() {
 
   let lastDateDisplayed = '';
 
+  const todayDate = new Date();
+  const todayDateStr = todayDate.getFullYear() + '-' + String(todayDate.getMonth() + 1).padStart(2, '0') + '-' + String(todayDate.getDate()).padStart(2, '0');
+  const todayQueueCount = queue.filter(b => getBookingDate(b) === todayDateStr).length;
+
   return (
     <div className="min-h-[100dvh] bg-carbon flex flex-col font-sans">
       {/* Top Bar (Always visible now) */}
@@ -500,7 +509,7 @@ export default function AdminDashboard() {
                 <div className="glass-card px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between sm:justify-start gap-4 bg-white/5 w-full sm:w-auto">
                   <div className="text-left sm:text-right flex flex-col justify-center">
                     <p className="text-[9px] sm:text-[10px] uppercase text-white/40 font-bold tracking-wider">Clientes na Fila</p>
-                    <p className="text-lg sm:text-xl font-mono font-bold text-gold leading-none mt-0.5">{queue.length}</p>
+                    <p className="text-lg sm:text-xl font-mono font-bold text-gold leading-none mt-0.5">{todayQueueCount}</p>
                   </div>
                   <div className="p-2 sm:p-2.5 bg-gold/10 rounded-lg shrink-0">
                     <Users className="w-4 h-4 sm:w-5 sm:h-5 text-gold" />
@@ -697,7 +706,7 @@ export default function AdminDashboard() {
                     )}
 
                     <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços</label>
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços e Produtos</label>
                       <div className="flex flex-wrap gap-2">
                          {services.map(s => (
                            <button
@@ -788,12 +797,12 @@ export default function AdminDashboard() {
                     <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
                       <Scissors className="w-5 h-5" />
                     </div>
-                    <h2 className="text-xl font-display font-bold">Editar Serviços</h2>
+                    <h2 className="text-xl font-display font-bold">Editar Serviços e Produtos</h2>
                   </div>
 
                   <form onSubmit={handleUpdateServices} className="space-y-4">
                     <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Itens Selecionados</label>
                       <div className="flex flex-wrap gap-2">
                          {services.map(s => (
                            <button

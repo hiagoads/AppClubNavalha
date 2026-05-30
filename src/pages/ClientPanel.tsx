@@ -132,7 +132,7 @@ export default function ClientPanel() {
         ...doc.data()
       })) as Service[];
       
-      const activeServices = servicesData.filter(s => s.isActive !== false);
+      const activeServices = servicesData.filter(s => s.isActive !== false && !s.isProduct);
       setServices(activeServices);
       
       if (activeServices.length > 0 && formData.serviceIds.length === 0) {

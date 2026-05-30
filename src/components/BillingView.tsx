@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { BookingStatus, Booking } from '../types';
 import { 
@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2 } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { formatTime, parsePrice } from '../utils';
@@ -29,6 +29,9 @@ export default function BillingView() {
 
   const [selectedClient, setSelectedClient] = useState<Booking | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const [isEditingRecord, setIsEditingRecord] = useState(false);
+  const [editData, setEditData] = useState<{ clientName: string, serviceId: string, priceOverride: string }>({ clientName: '', serviceId: '', priceOverride: '' });
 
   useEffect(() => {
     // Listen to completed bookings
@@ -57,6 +60,24 @@ export default function BillingView() {
          total += (promo > 0) ? promo : reg;
        } else {
          total += 0; 
+       }
+     });
+     return total;
+  };
+
+  const recalculatedPrice = (selectedServiceNames: string) => {
+     if (!selectedServiceNames) return 0;
+     const names = selectedServiceNames.split(',').map(s => s.trim());
+     let total = 0;
+     names.forEach(n => {
+       const s = services.find(srv => 
+         srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
+         srv.id === n
+       );
+       if (s) {
+         const promo = parsePrice(s.promoPrice);
+         const reg = parsePrice(s.price);
+         total += (promo > 0) ? promo : reg;
        }
      });
      return total;
@@ -203,6 +224,36 @@ export default function BillingView() {
 
   const dailyData = getChartData();
 
+  const toggleService = (sName: string) => {
+    let current = editData.serviceId.split(',').map(s => s.trim()).filter(s => s);
+    if (current.includes(sName)) {
+      current = current.filter(n => n !== sName);
+    } else {
+      current.push(sName);
+    }
+    const newServiceId = current.join(', ');
+    setEditData({ ...editData, serviceId: newServiceId, priceOverride: recalculatedPrice(newServiceId).toString() });
+  };
+
+  const saveEdit = async () => {
+    if (!selectedClient) return;
+    try {
+      const priceVal = parseFloat(editData.priceOverride);
+      const updates = {
+        clientName: editData.clientName,
+        serviceId: editData.serviceId,
+        price: isNaN(priceVal) ? null : priceVal
+      };
+      await updateDoc(doc(db, 'bookings', selectedClient.id), updates);
+      
+      setSelectedClient({ ...selectedClient, ...updates });
+      setIsEditingRecord(false);
+      toast.success('Registro atualizado com sucesso!');
+    } catch (err) {
+      toast.error('Erro ao atualizar registro');
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/5 p-4 rounded-2xl border border-white/10">
@@ -304,7 +355,10 @@ export default function BillingView() {
                   return (
                     <div 
                       key={b.id} 
-                      onClick={() => setSelectedClient(b)}
+                      onClick={() => {
+                        setSelectedClient(b);
+                        setIsEditingRecord(false);
+                      }}
                       className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-white/5 rounded-xl border border-white/5 cursor-pointer hover:bg-white/10 transition-colors"
                     >
                       <div>
@@ -328,96 +382,185 @@ export default function BillingView() {
 
       {selectedClient && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl w-full max-w-md p-6 relative">
+          <div className="glass-card bg-carbon-light border border-white/10 rounded-2xl w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto">
             <button 
-              onClick={() => setSelectedClient(null)} 
+              onClick={() => {
+                setSelectedClient(null);
+                setIsEditingRecord(false);
+              }} 
               className="absolute right-4 top-4 text-white/40 hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-xl font-display font-bold gold-text-gradient mb-6">Ficha do Cliente</h3>
-            
-            <div className="space-y-4">
-              <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                <span className="text-white/50">Nome</span>
-                <span className="font-bold text-white">{selectedClient.clientName}</span>
-              </div>
-              
-              <div className="flex flex-col border-b border-white/10 pb-4">
-                <span className="text-white/50 mb-1">Serviço(s)</span>
-                <span className="font-medium text-white text-right">{selectedClient.serviceId}</span>
-              </div>
-              
-              <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                <span className="text-white/50">Valor Pago</span>
-                <span className="font-bold text-gold">R$ {getBookingPrice(selectedClient).toFixed(2)}</span>
-              </div>
-              
-              <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                <div className="flex items-center gap-2 text-white/50">
-                  <Clock className="w-4 h-4" />
-                  <span>Espera na Fila</span>
-                </div>
-                <span className="font-medium text-white">
-                  {(() => {
-                    if (!selectedClient.createdAt || !selectedClient.serviceStartTime) return 'N/A';
-                    const cTime = typeof selectedClient.createdAt === 'number' ? selectedClient.createdAt : (typeof (selectedClient.createdAt as any).toMillis === 'function' ? (selectedClient.createdAt as any).toMillis() : new Date(selectedClient.createdAt).getTime());
-                    const sTime = typeof selectedClient.serviceStartTime === 'number' ? selectedClient.serviceStartTime : (typeof (selectedClient.serviceStartTime as any).toMillis === 'function' ? (selectedClient.serviceStartTime as any).toMillis() : new Date(selectedClient.serviceStartTime).getTime());
-                    const mins = Math.max(0, Math.floor((sTime - cTime) / 60000));
-                    return formatTime(mins);
-                  })()}
-                </span>
-              </div>
-              
-              <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                <div className="flex items-center gap-2 text-white/50">
-                  <Scissors className="w-4 h-4" />
-                  <span>Tempo de Serviço</span>
-                </div>
-                <span className="font-medium text-white">
-                  {(() => {
-                    if (!selectedClient.serviceStartTime || !selectedClient.estimatedEndTime) return 'N/A';
-                    const sTime = typeof selectedClient.serviceStartTime === 'number' ? selectedClient.serviceStartTime : (typeof (selectedClient.serviceStartTime as any).toMillis === 'function' ? (selectedClient.serviceStartTime as any).toMillis() : new Date(selectedClient.serviceStartTime).getTime());
-                    const eTime = typeof selectedClient.estimatedEndTime === 'number' ? selectedClient.estimatedEndTime : (typeof (selectedClient.estimatedEndTime as any).toMillis === 'function' ? (selectedClient.estimatedEndTime as any).toMillis() : new Date(selectedClient.estimatedEndTime).getTime());
-                    const mins = Math.max(0, Math.floor((eTime - sTime) / 60000));
-                    return formatTime(mins);
-                  })()}
-                </span>
-              </div>
+            <div className="flex justify-between items-center mb-6 pr-8">
+              <h3 className="text-xl font-display font-bold gold-text-gradient">Ficha do Cliente</h3>
+              {!isEditingRecord && (
+                <button
+                  onClick={() => {
+                    setEditData({ 
+                       clientName: selectedClient.clientName, 
+                       serviceId: selectedClient.serviceId, 
+                       priceOverride: getBookingPrice(selectedClient).toString() 
+                    });
+                    setIsEditingRecord(true);
+                  }}
+                  className="flex items-center gap-2 text-sm text-white/50 hover:text-white transition-colors"
+                >
+                  <Edit2 className="w-4 h-4" /> Editar
+                </button>
+              )}
             </div>
             
-            <div className="mt-8 flex flex-col gap-3">
-              <button 
-                onClick={async () => {
-                  if (confirmDeleteId === selectedClient.id) {
-                    try {
-                      await deleteDoc(doc(db, 'bookings', selectedClient.id));
-                      toast.success('Registro do cliente excluído com sucesso!');
-                      setSelectedClient(null);
-                      setConfirmDeleteId(null);
-                    } catch (error) {
-                      toast.error('Erro ao excluir registro');
+            {isEditingRecord ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Nome do Cliente</label>
+                  <input
+                    type="text"
+                    value={editData.clientName}
+                    onChange={(e) => setEditData({ ...editData, clientName: e.target.value })}
+                    className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços e Produtos</label>
+                  <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                     {services.map(s => {
+                        const selectedNames = editData.serviceId.split(',').map(x => x.trim()).filter(x => x);
+                        const isSelected = selectedNames.includes(s.name);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => toggleService(s.name)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${isSelected ? 'bg-gold/20 border-gold/50 text-gold' : 'bg-carbon border-white/10 text-white/50 hover:border-white/30'} flex items-center gap-2`}
+                          >
+                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
+                            {s.name} (R$ {(parsePrice(s.promoPrice) > 0 ? parsePrice(s.promoPrice) : parsePrice(s.price)).toFixed(2)})
+                          </button>
+                        );
+                     })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Valor Total Final (R$)</label>
+                  <input
+                    type="number"
+                    value={editData.priceOverride}
+                    onChange={(e) => setEditData({ ...editData, priceOverride: e.target.value })}
+                    className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors font-bold text-gold"
+                  />
+                  <p className="text-[10px] text-white/40">O valor é calculado automaticamente ao selecionar serviços/produtos, mas pode ser alterado manualmente.</p>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4">
+                   <button
+                     onClick={() => setIsEditingRecord(false)}
+                     className="px-4 py-2 rounded-lg text-sm font-bold text-white/40 hover:text-white transition-colors flex items-center gap-2"
+                   >
+                     <XCircle className="w-4 h-4" /> Cancelar
+                   </button>
+                   <button
+                     onClick={saveEdit}
+                     className="px-4 py-2 bg-gold text-carbon rounded-lg text-sm font-bold hover:bg-gold-dark transition-colors flex items-center gap-2"
+                   >
+                     <Save className="w-4 h-4" /> Salvar Alterações
+                   </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                  <span className="text-white/50">Nome</span>
+                  <span className="font-bold text-white">{selectedClient.clientName}</span>
+                </div>
+                
+                <div className="flex flex-col border-b border-white/10 pb-4">
+                  <span className="text-white/50 mb-1">Serviço(s) Registrados</span>
+                  <div className="flex flex-wrap gap-1 mt-1 justify-end">
+                    {selectedClient.serviceId.split(',').map((s, idx) => (
+                      <span key={idx} className="bg-white/10 px-2 py-0.5 rounded text-xs text-white/80">
+                        {s.trim()}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                  <span className="text-white/50">Valor Pago</span>
+                  <span className="font-bold text-gold text-lg">R$ {getBookingPrice(selectedClient).toFixed(2)}</span>
+                </div>
+                
+                <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                  <div className="flex items-center gap-2 text-white/50">
+                    <Clock className="w-4 h-4" />
+                    <span>Espera na Fila</span>
+                  </div>
+                  <span className="font-medium text-white">
+                    {(() => {
+                      if (!selectedClient.createdAt || !selectedClient.serviceStartTime) return 'N/A';
+                      const cTime = typeof selectedClient.createdAt === 'number' ? selectedClient.createdAt : (typeof (selectedClient.createdAt as any).toMillis === 'function' ? (selectedClient.createdAt as any).toMillis() : new Date(selectedClient.createdAt).getTime());
+                      const sTime = typeof selectedClient.serviceStartTime === 'number' ? selectedClient.serviceStartTime : (typeof (selectedClient.serviceStartTime as any).toMillis === 'function' ? (selectedClient.serviceStartTime as any).toMillis() : new Date(selectedClient.serviceStartTime).getTime());
+                      const mins = Math.max(0, Math.floor((sTime - cTime) / 60000));
+                      return formatTime(mins);
+                    })()}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                  <div className="flex items-center gap-2 text-white/50">
+                    <Scissors className="w-4 h-4" />
+                    <span>Tempo de Serviço</span>
+                  </div>
+                  <span className="font-medium text-white">
+                    {(() => {
+                      if (!selectedClient.serviceStartTime || !selectedClient.estimatedEndTime) return 'N/A';
+                      const sTime = typeof selectedClient.serviceStartTime === 'number' ? selectedClient.serviceStartTime : (typeof (selectedClient.serviceStartTime as any).toMillis === 'function' ? (selectedClient.serviceStartTime as any).toMillis() : new Date(selectedClient.serviceStartTime).getTime());
+                      const eTime = typeof selectedClient.estimatedEndTime === 'number' ? selectedClient.estimatedEndTime : (typeof (selectedClient.estimatedEndTime as any).toMillis === 'function' ? (selectedClient.estimatedEndTime as any).toMillis() : new Date(selectedClient.estimatedEndTime).getTime());
+                      const mins = Math.max(0, Math.floor((eTime - sTime) / 60000));
+                      return formatTime(mins);
+                    })()}
+                  </span>
+                </div>
+              </div>
+            )}
+            
+            {!isEditingRecord && (
+              <div className="mt-8 flex flex-col gap-3">
+                <button 
+                  onClick={async () => {
+                    if (confirmDeleteId === selectedClient.id) {
+                      try {
+                        await deleteDoc(doc(db, 'bookings', selectedClient.id));
+                        toast.success('Registro do cliente excluído com sucesso!');
+                        setSelectedClient(null);
+                        setConfirmDeleteId(null);
+                      } catch (error) {
+                        toast.error('Erro ao excluir registro');
+                      }
+                    } else {
+                      setConfirmDeleteId(selectedClient.id);
+                      setTimeout(() => setConfirmDeleteId(null), 3000);
                     }
-                  } else {
-                    setConfirmDeleteId(selectedClient.id);
-                    setTimeout(() => setConfirmDeleteId(null), 3000);
-                  }
-                }}
-                className={`w-full ${confirmDeleteId === selectedClient.id ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30'} font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2`}
-              >
-                <Trash2 className="w-5 h-5" />
-                {confirmDeleteId === selectedClient.id ? 'Confirmar Exclusão' : 'Excluir Registro'}
-              </button>
-              <button 
-                onClick={() => {
-                  setSelectedClient(null);
-                  setConfirmDeleteId(null);
-                }} 
-                className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3 rounded-xl transition-all"
-              >
-                Fechar
-              </button>
-            </div>
+                  }}
+                  className={`w-full ${confirmDeleteId === selectedClient.id ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30'} font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2`}
+                >
+                  <Trash2 className="w-5 h-5" />
+                  {confirmDeleteId === selectedClient.id ? 'Confirmar Exclusão' : 'Excluir Registro'}
+                </button>
+                <button 
+                  onClick={() => {
+                    setSelectedClient(null);
+                    setConfirmDeleteId(null);
+                  }} 
+                  className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3 rounded-xl transition-all"
+                >
+                  Fechar
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

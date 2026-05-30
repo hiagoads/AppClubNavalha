@@ -36,6 +36,7 @@ export interface Service {
   promoPrice?: number;
   isActive: boolean;
   imageUrl?: string;
+  isProduct?: boolean;
 }
 
 export interface Booking {

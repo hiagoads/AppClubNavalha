@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Service } from '../types';
-import { Plus, Edit2, Trash2, X, Save, Image as ImageIcon } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Save, Image as ImageIcon, Box } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { formatTime } from '../utils';
 
@@ -17,7 +17,8 @@ export default function ServicesManager() {
     price: 0,
     duration: 30,
     isActive: true,
-    imageUrl: ''
+    imageUrl: '',
+    isProduct: false
   });
 
   useEffect(() => {
@@ -44,35 +45,36 @@ export default function ServicesManager() {
       const serviceData = {
         name: formData.name,
         price: Number(formData.price),
-        duration: Number(formData.duration),
+        duration: formData.isProduct ? 0 : Number(formData.duration),
         isActive: formData.isActive ?? true,
-        imageUrl: formData.imageUrl || ''
+        imageUrl: formData.imageUrl || '',
+        isProduct: formData.isProduct || false
       };
 
       if (isEditing) {
         await updateDoc(doc(db, 'services', isEditing.id), serviceData);
-        toast.success('Serviço atualizado!');
+        toast.success('Atualizado com sucesso!');
       } else {
         await addDoc(collection(db, 'services'), serviceData);
-        toast.success('Serviço adicionado!');
+        toast.success('Adicionado com sucesso!');
       }
 
       setIsEditing(null);
       setIsAdding(false);
-      setFormData({ name: '', price: 0, duration: 30, isActive: true, imageUrl: '' });
+      setFormData({ name: '', price: 0, duration: 30, isActive: true, imageUrl: '', isProduct: false });
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao salvar serviço');
+      toast.error('Erro ao salvar');
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'services', id));
-      toast.success('Serviço excluído');
+      toast.success('Excluído');
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao excluir serviço');
+      toast.error('Erro ao excluir');
     }
   };
 
@@ -85,23 +87,23 @@ export default function ServicesManager() {
   const openAdd = () => {
     setIsAdding(true);
     setIsEditing(null);
-    setFormData({ name: '', price: 0, duration: 30, isActive: true, imageUrl: '' });
+    setFormData({ name: '', price: 0, duration: 30, isActive: true, imageUrl: '', isProduct: false });
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-white/50">Carregando serviços...</div>;
+    return <div className="p-8 text-center text-white/50">Carregando serviços/produtos...</div>;
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold font-display">Serviços</h2>
+        <h2 className="text-2xl font-bold font-display">Serviços e Produtos</h2>
         <button
           onClick={openAdd}
           className="flex items-center gap-2 bg-gold text-carbon px-4 py-2 rounded-lg font-bold hover:bg-gold-dark transition-colors text-sm sm:text-base"
         >
           <Plus className="w-5 h-5" />
-          Novo Serviço
+          Novo Item
         </button>
       </div>
 
@@ -110,7 +112,7 @@ export default function ServicesManager() {
           <div className="glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-xl relative animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold font-display silver-text-gradient">
-                {isEditing ? 'Editar Serviço' : 'Novo Serviço'}
+                {isEditing ? 'Editar Item' : 'Novo Item'}
               </h3>
               <button
                 onClick={() => {
@@ -123,15 +125,32 @@ export default function ServicesManager() {
               </button>
             </div>
 
+            <div className="flex bg-black/40 p-1 rounded-xl mb-6">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, isProduct: false })}
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!formData.isProduct ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
+              >
+                Serviço
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, isProduct: true, duration: 0 })}
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${formData.isProduct ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
+              >
+                Produto
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2 md:col-span-2">
-                <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Nome do Serviço</label>
+                <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Nome</label>
                 <input
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                  placeholder="Ex: Corte Degrade"
+                  placeholder={formData.isProduct ? "Ex: Pomada Modeladora" : "Ex: Corte Degrade"}
                 />
               </div>
 
@@ -150,22 +169,24 @@ export default function ServicesManager() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Duração (Minutos)</label>
-                <input
-                  type="number"
-                  value={formData.duration === undefined ? '' : formData.duration}
-                  onChange={(e) => {
-                    let val = e.target.value;
-                    val = val.replace(/^0+(?=\d)/, '');
-                    setFormData({ ...formData, duration: val as any });
-                  }}
-                  className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                  placeholder="Ex: 30"
-                />
-              </div>
+              {!formData.isProduct && (
+                <div className="space-y-2">
+                  <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Duração (Minutos)</label>
+                  <input
+                    type="number"
+                    value={formData.duration === undefined ? '' : formData.duration}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      val = val.replace(/^0+(?=\d)/, '');
+                      setFormData({ ...formData, duration: val as any });
+                    }}
+                    className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
+                    placeholder="Ex: 30"
+                  />
+                </div>
+              )}
 
-              <div className="space-y-2 md:col-span-2">
+              <div className={`space-y-2 ${formData.isProduct ? 'md:col-span-1' : 'md:col-span-2'}`}>
                 <label className="text-xs uppercase tracking-widest text-white/50 font-bold">URL da Imagem</label>
                 <input
                   type="text"
@@ -205,11 +226,17 @@ export default function ServicesManager() {
             {service.imageUrl ? (
               <div className="w-full h-48 bg-carbon relative">
                 <img src={service.imageUrl} alt={service.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white uppercase tracking-widest">
+                  {service.isProduct ? 'Produto' : 'Serviço'}
+                </div>
               </div>
             ) : (
-              <div className="w-full h-48 bg-carbon/50 flex flex-col items-center justify-center text-white/20">
-                <ImageIcon className="w-12 h-12 mb-2" />
+              <div className="w-full h-48 bg-carbon/50 flex flex-col items-center justify-center text-white/20 relative">
+                {service.isProduct ? <Box className="w-12 h-12 mb-2" /> : <ImageIcon className="w-12 h-12 mb-2" />}
                 <span className="text-xs uppercase tracking-widest font-bold">Sem imagem</span>
+                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white uppercase tracking-widest">
+                  {service.isProduct ? 'Produto' : 'Serviço'}
+                </div>
               </div>
             )}
             
@@ -220,7 +247,7 @@ export default function ServicesManager() {
               </div>
               <p className="text-sm text-white/50 mb-6 flex items-center gap-1">
                  <span className="inline-block w-2 h-2 rounded-full bg-white/20"></span>
-                 Duração: {formatTime(service.duration)}
+                 {service.isProduct ? 'Produto Físico' : `Duração: ${formatTime(service.duration)}`}
               </p>
 
               <div className="mt-auto flex gap-2 border-t border-white/10 pt-4">
@@ -243,7 +270,7 @@ export default function ServicesManager() {
 
         {services.length === 0 && !loading && (
           <div className="col-span-full py-16 text-center opacity-40">
-            <p>Nenhum serviço cadastrado.</p>
+            <p>Nenhum serviço ou produto cadastrado.</p>
           </div>
         )}
       </div>
