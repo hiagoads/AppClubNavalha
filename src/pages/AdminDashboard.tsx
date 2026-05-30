@@ -99,6 +99,14 @@ export default function AdminDashboard() {
       return;
     }
 
+    let expectedPrice = isScheduled ? Number(schedulingFee) : 0;
+    newClientData.serviceIds.forEach(sName => {
+      const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+      if (s) {
+        expectedPrice += getServicePrice(s);
+      }
+    });
+
     try {
       await addDoc(collection(db, 'bookings'), {
         clientName: newClientData.name,
@@ -108,6 +116,7 @@ export default function AdminDashboard() {
         type: newClientData.type,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
+        expectedPrice: expectedPrice,
         ...(isScheduled && { scheduledTime: newClientData.scheduledTime, scheduledDate: newClientData.scheduledDate }),
       });
       toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
@@ -370,10 +379,50 @@ export default function AdminDashboard() {
     }
   };
 
+  const getBookingDate = (b: Booking) => {
+    if (b.type === 'scheduled' && b.scheduledDate) {
+      return b.scheduledDate; // YYYY-MM-DD
+    }
+    let time = Date.now();
+    if (b.createdAt) {
+      if (typeof (b.createdAt as any).toMillis === 'function') time = (b.createdAt as any).toMillis();
+      else if (typeof b.createdAt === 'string') time = new Date(b.createdAt).getTime();
+      else if (typeof b.createdAt === 'number') time = b.createdAt;
+    }
+    const d = new Date(time);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+
+  const formatDateHeader = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-');
+    const dateStrObj = new Date(Number(y), Number(m)-1, Number(d));
+    
+    // adjust for local timezone offset so it doesn't shift
+    dateStrObj.setMinutes(dateStrObj.getMinutes() + dateStrObj.getTimezoneOffset());
+    
+    const today = new Date();
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    
+    if (dateStr === todayStr) return 'Hoje';
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tmwStr = tomorrow.getFullYear() + '-' + String(tomorrow.getMonth() + 1).padStart(2, '0') + '-' + String(tomorrow.getDate()).padStart(2, '0');
+    if (dateStr === tmwStr) return 'Amanhã';
+
+    let weekday = dateStrObj.toLocaleDateString('pt-BR', { weekday: 'long' }).split('-')[0];
+    weekday = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    const dateFormatted = dateStrObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+
+    return `${weekday}, ${dateFormatted}`;
+  };
+
+  let lastDateDisplayed = '';
+
   return (
-    <div className="min-h-[100dvh] bg-carbon flex flex-col md:flex-row font-sans">
-      {/* Mobile Top Bar */}
-      <div className="md:hidden bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
+    <div className="min-h-[100dvh] bg-carbon flex flex-col font-sans">
+      {/* Top Bar (Always visible now) */}
+      <div className="bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h2 className="text-sm font-sans font-bold tracking-widest copper-text uppercase">Club</h2>
@@ -397,40 +446,11 @@ export default function AdminDashboard() {
         </button>
       </div>
 
-      {/* Sidebar */}
+      {/* Sidebar - Now a fixed overlay on all sizes */}
       <aside className={`${
         isMobileMenuOpen ? 'flex' : 'hidden'
-      } md:flex w-full md:w-64 bg-carbon-light border-b md:border-b-0 md:border-r border-white/10 p-4 sm:p-6 flex-col shrink-0 overflow-y-auto fixed md:relative h-[calc(100dvh-80px)] md:h-auto z-10 top-[80px] md:top-0 pb-12 md:pb-6`}>
-        <div className="hidden md:flex flex-col mb-6 sm:mb-10">
-          <div className="flex items-center gap-2 mb-1 sm:mb-2">
-            <h2 className="text-base sm:text-lg font-sans font-bold tracking-widest copper-text uppercase">Club</h2>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none">
-            Navalha
-          </h1>
-          <p className="text-gold font-sans text-[10px] font-bold uppercase tracking-[0.2em] mt-1">
-            • Barbearia •
-          </p>
-
-          <div className="mt-4 flex flex-col gap-2">
-            <div className="flex items-center justify-between bg-white/5 border border-white/10 rounded-lg p-2.5">
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isOpen ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`}></div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-white/70">
-                  {isOpen ? 'Aberta' : 'Fechada'}
-                </span>
-              </div>
-              <button
-                onClick={() => toggleOpenStatus(isOpen)}
-                className={`text-[9px] px-2 py-1 rounded tracking-wider uppercase font-bold transition-colors ${isOpen ? 'bg-white/10 text-white hover:bg-red-500/20 hover:text-red-400' : 'bg-gold/20 text-gold hover:bg-green-500/20 hover:text-green-400'}`}
-              >
-                {isOpen ? 'Fechar' : 'Abrir'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <nav className="flex-1 space-y-2">
+      } w-full md:w-64 bg-carbon-light/95 backdrop-blur-md border-r border-white/10 p-4 sm:p-6 flex-col shrink-0 overflow-y-auto fixed h-[calc(100dvh-80px)] z-30 top-[80px] pb-12`}>
+        <nav className="flex-1 space-y-2 mt-4">
           <button onClick={() => { setActiveTab('queue'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
             <NavItem icon={<Users />} label="Fila" active={activeTab === 'queue'} />
           </button>
@@ -699,6 +719,41 @@ export default function AdminDashboard() {
                       </div>
                     </div>
 
+                    {newClientData.serviceIds.length > 0 && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex flex-col gap-1">
+                        <div className="flex justify-between items-center">
+                          <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
+                          <span className="text-gold font-bold text-xl">
+                            R$ {newClientData.serviceIds.reduce((acc, sName) => {
+                              const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+                              if (!s) return acc;
+                              return acc + getServicePrice(s);
+                            }, newClientData.type === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
+                          </span>
+                        </div>
+                        {newClientData.type === 'scheduled' && Number(schedulingFee) > 0 && (
+                          <span className="text-white/40 text-xs text-right">
+                            Inclui taxa de agendamento (R$ {Number(schedulingFee).toFixed(2)})
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="bg-gold/10 border border-gold/20 rounded-xl p-4 mt-4 flex gap-3">
+                      <AlertTriangle className="w-5 h-5 text-gold shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-gold text-sm font-bold">Aviso Importante</p>
+                        <p className="text-white/70 text-xs mt-1 leading-relaxed">
+                          Uma taxa de agendamento está inclusa (se aplicável), e deverá ser paga junto com o serviço no local. A perda do horário implica no não reembolso de taxas.
+                        </p>
+                        {newClientData.type === 'scheduled' && Number(schedulingFee) > 0 && (
+                          <p className="text-white/70 text-xs mt-2 leading-relaxed font-semibold bg-black/20 p-2 rounded inline-block">
+                            Há uma taxa de agendamento de R$ {Number(schedulingFee).toFixed(2)} que será cobrada no momento do serviço.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="pt-4 flex justify-end gap-3">
                       <button
                         type="button"
@@ -876,15 +931,31 @@ export default function AdminDashboard() {
                 <h2 className="text-xs uppercase tracking-widest text-white/30 font-bold mb-4">Fila de Espera</h2>
                 <div className="space-y-3">
                   <AnimatePresence>
-                    {(sortedQueue || []).map((item, idx) => (
-                      <motion.div
-                        key={item.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        className="glass-card p-3 sm:p-4 flex flex-col gap-3 sm:gap-4 group transition-all hover:border-gold/30"
-                      >
-                        {/* Top Line: Number, Name, Service, Type */}
+                    {(sortedQueue || []).map((item, idx) => {
+                      const dateStr = getBookingDate(item);
+                      const showHeader = dateStr !== lastDateDisplayed;
+                      lastDateDisplayed = dateStr;
+
+                      return (
+                        <React.Fragment key={item.id}>
+                          {showHeader && (
+                            <motion.div 
+                              initial={{ opacity: 0 }} 
+                              animate={{ opacity: 1 }} 
+                              className="pt-4 pb-2 first:pt-0"
+                            >
+                              <h3 className="text-sm uppercase tracking-widest text-gold font-bold">
+                                {formatDateHeader(dateStr)}
+                              </h3>
+                            </motion.div>
+                          )}
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="glass-card p-3 sm:p-4 flex flex-col gap-3 sm:gap-4 group transition-all hover:border-gold/30"
+                          >
+                            {/* Top Line: Number, Name, Service, Type */}
                         <div className="flex items-start sm:items-center gap-3 sm:gap-4">
                           <div className="text-white/20 font-mono text-xs sm:text-sm w-4 sm:w-6 pt-0.5 sm:pt-0 shrink-0">{idx + 1}</div>
                           <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -972,7 +1043,9 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       </motion.div>
-                    ))}
+                    </React.Fragment>
+                    );
+                    })}
                   </AnimatePresence>
                   
                   {queue.length === 0 && (

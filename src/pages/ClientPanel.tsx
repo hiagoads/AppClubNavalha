@@ -339,6 +339,45 @@ export default function ClientPanel() {
   const myPosition = myBooking ? sortedQueue?.findIndex(b => b.id === myBookingId) + 1 : -1;
   const myWaitTime = myBookingId ? (queueWaitTimes[myBookingId] || 0) : 0;
 
+  const getBookingDate = (b: any) => {
+    if (b.type === 'scheduled' && b.scheduledDate) {
+      return b.scheduledDate;
+    }
+    let time = Date.now();
+    if (b.createdAt) {
+      if (typeof (b.createdAt as any).toMillis === 'function') time = (b.createdAt as any).toMillis();
+      else if (typeof b.createdAt === 'string') time = new Date(b.createdAt).getTime();
+      else if (typeof b.createdAt === 'number') time = b.createdAt;
+    }
+    const d = new Date(time);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+
+  const formatDateHeader = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-');
+    const dateStrObj = new Date(Number(y), Number(m)-1, Number(d));
+    
+    dateStrObj.setMinutes(dateStrObj.getMinutes() + dateStrObj.getTimezoneOffset());
+    
+    const today = new Date();
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    
+    if (dateStr === todayStr) return 'Hoje';
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tmwStr = tomorrow.getFullYear() + '-' + String(tomorrow.getMonth() + 1).padStart(2, '0') + '-' + String(tomorrow.getDate()).padStart(2, '0');
+    if (dateStr === tmwStr) return 'Amanhã';
+
+    let weekday = dateStrObj.toLocaleDateString('pt-BR', { weekday: 'long' }).split('-')[0];
+    weekday = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    const dateFormatted = dateStrObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+
+    return `${weekday}, ${dateFormatted}`;
+  };
+
+  let lastDateDisplayed = '';
+
   return (
     <div className="min-h-[100dvh] bg-carbon overflow-x-hidden pt-6 pb-24 px-4 sm:px-6 relative">
       <button 
@@ -523,15 +562,31 @@ export default function ClientPanel() {
                 A fila está vazia. Seja o primeiro!
               </div>
             ) : (
-              sortedQueue.map((booking, index) => (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  key={booking.id}
-                  className="glass-card p-4 sm:p-5 flex flex-col gap-3 group"
-                >
-                  <div className="flex items-start sm:items-center gap-3 sm:gap-4">
+              sortedQueue.map((booking, index) => {
+                const dateStr = getBookingDate(booking);
+                const showHeader = dateStr !== lastDateDisplayed;
+                lastDateDisplayed = dateStr;
+
+                return (
+                  <React.Fragment key={booking.id}>
+                    {showHeader && (
+                      <motion.div 
+                        initial={{ opacity: 0 }} 
+                        animate={{ opacity: 1 }} 
+                        className="pt-2 pb-1"
+                      >
+                        <h3 className="text-xs uppercase tracking-widest text-gold font-bold">
+                          {formatDateHeader(dateStr)}
+                        </h3>
+                      </motion.div>
+                    )}
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="glass-card p-4 sm:p-5 flex flex-col gap-3 group"
+                    >
+                      <div className="flex items-start sm:items-center gap-3 sm:gap-4">
                     <span className="text-white/20 font-mono text-sm sm:text-base w-5 sm:w-6 pt-0.5 sm:pt-0 shrink-0 text-center">
                       {index + 1}
                     </span>
@@ -571,7 +626,9 @@ export default function ClientPanel() {
                     </div>
                   </div>
                 </motion.div>
-              ))
+                </React.Fragment>
+                );
+              })
             )}
           </div>
         </section>
@@ -779,12 +836,12 @@ export default function ClientPanel() {
                           const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
                           if (!s) return acc;
                           return acc + getServicePrice(s);
-                        }, formType === 'scheduled' ? schedulingFee : 0).toFixed(2)}
+                        }, formType === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
                       </span>
                     </div>
-                    {formType === 'scheduled' && schedulingFee > 0 && (
+                    {formType === 'scheduled' && Number(schedulingFee) > 0 && (
                       <span className="text-white/40 text-xs text-right">
-                        Inclui taxa de agendamento (R$ {schedulingFee.toFixed(2)})
+                        Inclui taxa de agendamento (R$ {Number(schedulingFee).toFixed(2)})
                       </span>
                     )}
                   </div>
@@ -797,9 +854,9 @@ export default function ClientPanel() {
                     <p className="text-white/70 text-xs mt-1 leading-relaxed">
                       Em caso de atraso e se você não estiver presente na sua vez, você perderá sua posição na fila/agendamento.
                     </p>
-                    {formType === 'scheduled' && schedulingFee > 0 && (
+                    {formType === 'scheduled' && Number(schedulingFee) > 0 && (
                       <p className="text-white/70 text-xs mt-2 leading-relaxed font-semibold bg-black/20 p-2 rounded inline-block">
-                        Há uma taxa de agendamento de R$ {schedulingFee.toFixed(2)} que será cobrada no momento do serviço.
+                        Há uma taxa de agendamento de R$ {Number(schedulingFee).toFixed(2)} que será cobrada no momento do serviço.
                       </p>
                     )}
                   </div>
