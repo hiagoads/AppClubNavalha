@@ -73,17 +73,17 @@ export default function AdminDashboard() {
     scheduledDate: new Date().toISOString().split('T')[0],
   });
 
-  const [editingServicesBooking, setEditingServicesBooking] = useState<{id: string, services: string[]} | null>(null);
+  const [editingServicesBooking, setEditingServicesBooking] = useState<{id: string, serviceId: string} | null>(null);
 
   const handleUpdateServices = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingServicesBooking || editingServicesBooking.services.length === 0) {
+    if (!editingServicesBooking || editingServicesBooking.serviceId.trim() === '') {
       toast.error('Selecione pelo menos um serviço');
       return;
     }
     try {
       await updateDoc(doc(db, 'bookings', editingServicesBooking.id), {
-        serviceId: editingServicesBooking.services.join(', ')
+        serviceId: editingServicesBooking.serviceId
       });
       toast.success('Serviços atualizados com sucesso');
       setEditingServicesBooking(null);
@@ -189,17 +189,15 @@ export default function AdminDashboard() {
       if (activeInfo && activeInfo.expectedPrice !== undefined && activeInfo.expectedPrice !== null) {
         finalPrice = Number(activeInfo.expectedPrice);
       } else if (activeInfo && activeInfo.serviceId) {
-        const names = activeInfo.serviceId.split(',').map(s => s.trim());
-        names.forEach(n => {
-          const s = services.find(srv => 
-            srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
-            srv.id === n
-          );
-          if (s) {
-            const promo = parsePrice(s.promoPrice);
-            const reg = parsePrice(s.price);
-            finalPrice += (promo > 0) ? promo : reg;
-          }
+        let temp = activeInfo.serviceId;
+        const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+        sorted.forEach(s => {
+           if (temp.includes(s.name)) {
+              temp = temp.replace(s.name, '');
+              const promo = parsePrice(s.promoPrice);
+              const reg = parsePrice(s.price);
+              finalPrice += (promo > 0) ? promo : reg;
+           }
         });
       }
 
@@ -812,28 +810,51 @@ export default function AdminDashboard() {
 
                   <form onSubmit={handleUpdateServices} className="space-y-4">
                     <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Itens Selecionados</label>
+                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços / Produtos</label>
+                      <input
+                        type="text"
+                        value={editingServicesBooking.serviceId}
+                        onChange={(e) => {
+                           setEditingServicesBooking(prev => prev ? { ...prev, serviceId: e.target.value } : prev);
+                        }}
+                        placeholder="Ex: Corte, Barba"
+                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2"
+                      />
                       <div className="flex flex-wrap gap-2">
-                         {services.map(s => (
-                           <button
-                             key={s.id}
-                             type="button"
-                             onClick={() => {
-                               setEditingServicesBooking(prev => {
-                                 if (!prev) return prev;
-                                 return {
-                                   ...prev,
-                                   services: prev.services.includes(s.name)
-                                     ? prev.services.filter(id => id !== s.name)
-                                     : [...prev.services, s.name]
-                                 };
-                               });
-                             }}
-                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${editingServicesBooking.services.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                           >
-                             {s.name}
-                           </button>
-                         ))}
+                         {services.map(s => {
+                           let temp = editingServicesBooking.serviceId;
+                           const parsed: string[] = [];
+                           const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+                           for (const srv of sorted) {
+                              if (temp.includes(srv.name)) {
+                                 parsed.push(srv.name);
+                                 temp = temp.replace(srv.name, '');
+                              }
+                           }
+                           const isSelected = parsed.includes(s.name);
+                           return (
+                             <button
+                               key={s.id}
+                               type="button"
+                               onClick={() => {
+                                 setEditingServicesBooking(prev => {
+                                   if (!prev) return prev;
+                                   let curStr = prev.serviceId;
+                                   if (parsed.includes(s.name)) {
+                                      curStr = curStr.replace(s.name, '').replace(/,\s*,/g, ', ').replace(/(^,\s*)|(\s*,$)/g, '').trim();
+                                   } else {
+                                      curStr = curStr ? curStr + ', ' + s.name : s.name;
+                                   }
+                                   return { ...prev, serviceId: curStr };
+                                 });
+                               }}
+                               className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                             >
+                               {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
+                               {s.name}
+                             </button>
+                           );
+                         })}
                       </div>
                     </div>
 
@@ -880,7 +901,7 @@ export default function AdminDashboard() {
                             </span>
                           )}
                           <p className="text-gold text-sm font-medium">{activeBooking.serviceId}</p>
-                          <button onClick={() => setEditingServicesBooking({id: activeBooking.id, services: activeBooking.serviceId.split(', ')})} className="text-white/40 hover:text-white p-1">
+                          <button onClick={() => setEditingServicesBooking({id: activeBooking.id, serviceId: activeBooking.serviceId})} className="text-white/40 hover:text-white p-1">
                             <Edit2 className="w-3 h-3" />
                           </button>
                         </div>
@@ -981,7 +1002,7 @@ export default function AdminDashboard() {
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
                             <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
                               <span className="truncate">{item.serviceId}</span>
-                              <button onClick={() => setEditingServicesBooking({id: item.id, services: item.serviceId.split(', ')})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">
+                              <button onClick={() => setEditingServicesBooking({id: item.id, serviceId: item.serviceId})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">
                                 <Edit2 className="w-3 h-3" />
                               </button>
                             </span>

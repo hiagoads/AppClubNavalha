@@ -67,14 +67,12 @@ export default function BillingView() {
 
   const recalculatedPrice = (selectedServiceNames: string) => {
      if (!selectedServiceNames) return 0;
-     const names = selectedServiceNames.split(',').map(s => s.trim());
+     let temp = selectedServiceNames;
      let total = 0;
-     names.forEach(n => {
-       const s = services.find(srv => 
-         srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
-         srv.id === n
-       );
-       if (s) {
+     const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+     sorted.forEach(s => {
+       if (temp.includes(s.name)) {
+         temp = temp.replace(s.name, '');
          const promo = parsePrice(s.promoPrice);
          const reg = parsePrice(s.price);
          total += (promo > 0) ? promo : reg;
@@ -224,16 +222,29 @@ export default function BillingView() {
 
   const dailyData = getChartData();
 
+  const parsedServiceNames = (() => {
+     let temp = editData.serviceId;
+     const result: string[] = [];
+     const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+     for (const s of sorted) {
+        if (temp.includes(s.name)) {
+           result.push(s.name);
+           temp = temp.replace(s.name, '');
+        }
+     }
+     return result;
+  })();
+
   const toggleService = (sName: string) => {
-    let current = editData.serviceId.split(',').map(s => s.trim()).filter(s => s);
-    if (current.includes(sName)) {
-      current = current.filter(n => n !== sName);
+    let newStr = editData.serviceId;
+    if (parsedServiceNames.includes(sName)) {
+       newStr = newStr.replace(sName, '').replace(/,\s*,/g, ', ').replace(/(^,\s*)|(\s*,$)/g, '').trim();
     } else {
-      current.push(sName);
+       newStr = newStr ? newStr + ', ' + sName : sName;
     }
-    const newServiceId = current.join(', ');
-    setEditData({ ...editData, serviceId: newServiceId, priceOverride: recalculatedPrice(newServiceId).toString() });
+    setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });
   };
+
 
   const saveEdit = async () => {
     if (!selectedClient) return;
@@ -425,10 +436,16 @@ export default function BillingView() {
                 
                 <div className="space-y-2">
                   <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços e Produtos</label>
+                  <input
+                    type="text"
+                    value={editData.serviceId}
+                    onChange={(e) => setEditData({ ...editData, serviceId: e.target.value, priceOverride: recalculatedPrice(e.target.value).toString() })}
+                    placeholder="Ex: Corte, Barba"
+                    className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2"
+                  />
                   <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
                      {services.map(s => {
-                        const selectedNames = editData.serviceId.split(',').map(x => x.trim()).filter(x => x);
-                        const isSelected = selectedNames.includes(s.name);
+                        const isSelected = parsedServiceNames.includes(s.name);
                         return (
                           <button
                             key={s.id}

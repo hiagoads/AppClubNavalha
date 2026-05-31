@@ -49,13 +49,17 @@ export function useQueueTimers(
     
     // Find service duration (handle multiple)
     let baseDuration = 0;
-    const activeServiceNames = activeBooking.serviceId.split(',').map(s => s.trim());
-    if (activeServiceNames.length > 0) {
-      activeServiceNames.forEach(sName => {
-        const service = services.find(s => s.name === sName);
-        baseDuration += service?.duration || 30;
-      });
-    } else {
+    let temp = activeBooking.serviceId;
+    let foundAny = false;
+    const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+    sorted.forEach(s => {
+       if (temp.includes(s.name)) {
+          temp = temp.replace(s.name, '');
+          baseDuration += s.duration || 30;
+          foundAny = true;
+       }
+    });
+    if (!foundAny) {
       baseDuration = 30; // Default
     }
     
@@ -84,13 +88,17 @@ export function useQueueTimers(
 
   const getDuration = (b: Booking) => {
     let d = 0;
-    const names = b.serviceId.split(',').map(s => s.trim());
-    if (names.length) {
-      names.forEach(n => {
-        const s = services.find(x => x.name === n);
-        d += s?.duration || 30;
-      });
-    } else d = 30;
+    let temp = b.serviceId;
+    let foundAny = false;
+    const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
+    sorted.forEach(s => {
+       if (temp.includes(s.name)) {
+          temp = temp.replace(s.name, '');
+          d += s.duration || 30;
+          foundAny = true;
+       }
+    });
+    if (!foundAny) d = 30;
     return d;
   };
 
