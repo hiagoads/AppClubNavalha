@@ -100,8 +100,14 @@ export default function BillingView() {
       start = new Date(now.getFullYear(), now.getMonth(), 1);
       end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     } else if (period === 'period') {
-      start = new Date(customStart + 'T00:00:00');
-      end = new Date(customEnd + 'T23:59:59');
+      if (customStart) {
+         const [y, m, d] = customStart.split('-');
+         start = new Date(Number(y), Number(m) - 1, Number(d), 0, 0, 0);
+      }
+      if (customEnd) {
+         const [y, m, d] = customEnd.split('-');
+         end = new Date(Number(y), Number(m) - 1, Number(d), 23, 59, 59, 999);
+      }
     }
 
     return bookings.filter(b => {
@@ -182,8 +188,16 @@ export default function BillingView() {
         });
       }
     } else if (period === 'period') {
-       const start = new Date(customStart + 'T00:00:00');
-       const end = new Date(customEnd + 'T23:59:59');
+       let start = new Date();
+       let end = new Date();
+       if (customStart) {
+          const [y, m, d] = customStart.split('-');
+          start = new Date(Number(y), Number(m) - 1, Number(d), 0, 0, 0);
+       }
+       if (customEnd) {
+          const [y, m, d] = customEnd.split('-');
+          end = new Date(Number(y), Number(m) - 1, Number(d), 23, 59, 59, 999);
+       }
        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
          chartDays.push({
             label: `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}`,
