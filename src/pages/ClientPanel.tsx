@@ -11,7 +11,7 @@ import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot,
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import { formatTime, getDistanceFromLatLonInMeters, parsePrice } from '../utils';
+import { formatTime, getDistanceFromLatLonInMeters, parsePrice, parseServiceString, stringifyServices } from '../utils';
 
 export const getServicePrice = (s: any) => {
   if (!s) return 0;
@@ -234,21 +234,30 @@ export default function ClientPanel() {
     }
   };
 
-  const [editingServices, setEditingServices] = useState<{id: string, services: string[]} | null>(null);
+  const [editingServices, setEditingServices] = useState<{id: string, serviceId: string} | null>(null);
 
   const handleUpdateServices = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingServices || editingServices.services.length === 0) {
+    if (!editingServices || editingServices.serviceId.trim() === '') {
       toast.error('Selecione pelo menos um serviço');
       return;
     }
     try {
+      let expectedPriceLocal = 0;
+      parseServiceString(editingServices.serviceId).forEach(ps => {
+         const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+         if (s) {
+           expectedPriceLocal += getServicePrice(s) * ps.quantity;
+         }
+      });
       await updateDoc(doc(db, 'bookings', editingServices.id), {
-        serviceId: editingServices.services.join(', ')
+        serviceId: editingServices.serviceId,
+        expectedPrice: expectedPriceLocal
       });
       toast.success('Serviços atualizados com sucesso');
       setEditingServices(null);
     } catch (err) {
+      console.error("Update error:", err);
       toast.error('Erro ao atualizar serviços');
     }
   };
@@ -466,7 +475,7 @@ export default function ClientPanel() {
                   <div className="flex items-center gap-2 mt-1 mb-1">
                     <p className="text-gold text-sm">{myBooking.serviceId}</p>
                     {myBooking.status !== BookingStatus.IN_SERVICE && (
-                      <button onClick={() => setEditingServices({id: myBooking.id, services: myBooking.serviceId.split(', ')})} className="text-white/40 hover:text-white p-1">
+                      <button onClick={() => setEditingServices({id: myBooking.id, serviceId: myBooking.serviceId})} className="text-white/40 hover:text-white p-1">
                         <Edit2 className="w-3 h-3" />
                       </button>
                     )}
@@ -899,29 +908,37 @@ export default function ClientPanel() {
 
                   <form onSubmit={handleUpdateServices} className="space-y-4">
                     <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
-                      <div className="flex flex-wrap gap-2">
-                         {services.map(s => (
-                           <button
-                             key={s.id}
-                             type="button"
-                             onClick={() => {
-                               setEditingServices(prev => {
-                                 if (!prev) return prev;
-                                 return {
-                                   ...prev,
-                                   services: prev.services.includes(s.name)
-                                     ? prev.services.filter(id => id !== s.name)
-                                     : [...prev.services, s.name]
-                                 };
-                               });
-                             }}
-                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${editingServices.services.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                           >
-                             {s.name}
-                           </button>
-                         ))}
-                      </div>
+                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
+                       <div className="flex flex-col gap-2">
+                         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                           {services.map(s => {
+                             const parsedNames = parseServiceString(editingServices.serviceId).map(ps => ps.name.trim().toLowerCase());
+                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
+                             return (
+                               <button
+                                 key={s.id}
+                                 type="button"
+                                 onClick={() => {
+                                   setEditingServices(prev => {
+                                     if (!prev) return prev;
+                                     let parsed = parseServiceString(prev.serviceId);
+                                     if (isSelected) {
+                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
+                                     } else {
+                                       parsed.push({ quantity: 1, name: s.name });
+                                     }
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
+                                   });
+                                 }}
+                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                               >
+                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
+                                 {s.name}
+                               </button>
+                             );
+                           })}
+                         </div>
+                       </div>
                     </div>
 
                     <div className="pt-4 flex justify-end gap-3">

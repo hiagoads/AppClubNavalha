@@ -14,7 +14,7 @@ import { BarbersManager } from '../components/BarbersManager';
 import ServicesManager from '../components/ServicesManager';
 import { GlobalSettings } from '../components/GlobalSettings';
 import QueueLogView from '../components/QueueLogView';
-import { formatTime, parsePrice } from '../utils';
+import { formatTime, parsePrice, parseServiceString, stringifyServices } from '../utils';
 import { 
   Play, 
   Pause,
@@ -66,7 +66,7 @@ export default function AdminDashboard() {
   const [newClientData, setNewClientData] = useState({
     name: '',
     whatsapp: '',
-    serviceIds: [] as string[],
+    serviceId: '',
     barberId: 'any',
     type: 'walk-in',
     scheduledTime: '',
@@ -82,8 +82,16 @@ export default function AdminDashboard() {
       return;
     }
     try {
+      let expectedPriceLocal = 0;
+      parseServiceString(editingServicesBooking.serviceId).forEach(ps => {
+         const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+         if (s) {
+           expectedPriceLocal += getServicePrice(s) * ps.quantity;
+         }
+      });
       await updateDoc(doc(db, 'bookings', editingServicesBooking.id), {
-        serviceId: editingServicesBooking.serviceId
+        serviceId: editingServicesBooking.serviceId,
+        expectedPrice: expectedPriceLocal
       });
       toast.success('Serviços atualizados com sucesso');
       setEditingServicesBooking(null);
@@ -106,10 +114,11 @@ export default function AdminDashboard() {
     }
 
     let expectedPrice = isScheduled ? Number(schedulingFee) : 0;
-    newClientData.serviceIds.forEach(sName => {
-      const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+    const parsedServices = parseServiceString(newClientData.serviceId);
+    parsedServices.forEach(ps => {
+      const s = services.find(x => x.name.trim().toLowerCase() === ps.name.toLowerCase() || x.id === ps.name);
       if (s) {
-        expectedPrice += getServicePrice(s);
+        expectedPrice += getServicePrice(s) * ps.quantity;
       }
     });
 
@@ -123,7 +132,7 @@ export default function AdminDashboard() {
       await addDoc(collection(db, 'bookings'), {
         clientName: newClientData.name,
         clientWhatsapp: newClientData.whatsapp,
-        serviceId: newClientData.serviceIds.join(', '),
+        serviceId: newClientData.serviceId,
         barberId: finalBarberId,
         type: newClientData.type,
         status: BookingStatus.WAITING,
@@ -133,7 +142,7 @@ export default function AdminDashboard() {
       });
       toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
       setIsAddingClient(false);
-      setNewClientData({ name: '', whatsapp: '', serviceIds: [], barberId: 'any', type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
+      setNewClientData({ name: '', whatsapp: '', serviceId: '', barberId: 'any', type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
     } catch(err) {
       toast.error('Erro ao adicionar cliente');
     }
@@ -189,14 +198,13 @@ export default function AdminDashboard() {
       if (activeInfo && activeInfo.expectedPrice !== undefined && activeInfo.expectedPrice !== null) {
         finalPrice = Number(activeInfo.expectedPrice);
       } else if (activeInfo && activeInfo.serviceId) {
-        let temp = activeInfo.serviceId;
-        const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-        sorted.forEach(s => {
-           if (temp.includes(s.name)) {
-              temp = temp.replace(s.name, '');
+        const parsedServices = parseServiceString(activeInfo.serviceId);
+        parsedServices.forEach(ps => {
+           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+           if (s) {
               const promo = parsePrice(s.promoPrice);
               const reg = parsePrice(s.price);
-              finalPrice += (promo > 0) ? promo : reg;
+              finalPrice += ((promo > 0) ? promo : reg) * ps.quantity;
            }
         });
       }
@@ -715,36 +723,95 @@ export default function AdminDashboard() {
 
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços e Produtos</label>
-                      <div className="flex flex-wrap gap-2">
-                         {services.map(s => (
-                           <button
-                             key={s.id}
-                             type="button"
-                             onClick={() => {
-                               setNewClientData(prev => ({
-                                 ...prev,
-                                 serviceIds: prev.serviceIds.includes(s.name)
-                                   ? prev.serviceIds.filter(id => id !== s.name)
-                                   : [...prev.serviceIds, s.name]
-                               }));
-                             }}
-                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${newClientData.serviceIds.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                           >
-                             {s.name}
-                           </button>
-                         ))}
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                           {services.map(s => {
+                             const parsedNames = parseServiceString(newClientData.serviceId).map(ps => ps.name.trim().toLowerCase());
+                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
+                             return (
+                               <button
+                                 key={s.id}
+                                 type="button"
+                                 onClick={() => {
+                                   setNewClientData(prev => {
+                                     let parsed = parseServiceString(prev.serviceId);
+                                     if (isSelected) {
+                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
+                                     } else {
+                                       parsed.push({ quantity: 1, name: s.name });
+                                     }
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
+                                   });
+                                 }}
+                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                               >
+                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
+                                 {s.name}
+                               </button>
+                             );
+                           })}
+                        </div>
+                        {parseServiceString(newClientData.serviceId).filter(ps => {
+                           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
+                           return s?.isProduct;
+                        }).map(ps => (
+                           <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
+                             <label className="text-xs text-white/70 font-bold flex justify-between">
+                               <span>Quantidade: {ps.name}</span>
+                               <span className="text-gold">R$ {
+                                 ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                               }</span>
+                             </label>
+                             <div className="flex items-center gap-3">
+                               <button 
+                                 type="button" 
+                                 onClick={() => {
+                                   setNewClientData(prev => {
+                                     let parsed = parseServiceString(prev.serviceId);
+                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                     if (existing) {
+                                       existing.quantity -= 1;
+                                       if (existing.quantity <= 0) {
+                                         parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
+                                       }
+                                     }
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
+                                   });
+                                 }}
+                                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                               >
+                                 -
+                               </button>
+                               <span className="w-8 text-center text-white font-bold">{ps.quantity}</span>
+                               <button 
+                                 type="button" 
+                                 onClick={() => {
+                                   setNewClientData(prev => {
+                                     let parsed = parseServiceString(prev.serviceId);
+                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                     if (existing) existing.quantity += 1;
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
+                                   });
+                                 }}
+                                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                               >
+                                 +
+                               </button>
+                             </div>
+                           </div>
+                        ))}
                       </div>
                     </div>
 
-                    {newClientData.serviceIds.length > 0 && (
+                    {newClientData.serviceId.length > 0 && (
                       <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex flex-col gap-1">
                         <div className="flex justify-between items-center">
                           <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
                           <span className="text-gold font-bold text-xl">
-                            R$ {newClientData.serviceIds.reduce((acc, sName) => {
-                              const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+                            R$ {parseServiceString(newClientData.serviceId).reduce((acc, ps) => {
+                              const s = services.find(x => x.name.trim().toLowerCase() === ps.name.toLowerCase() || x.id === ps.name);
                               if (!s) return acc;
-                              return acc + getServicePrice(s);
+                              return acc + (getServicePrice(s) * ps.quantity);
                             }, newClientData.type === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
                           </span>
                         </div>
@@ -820,42 +887,87 @@ export default function AdminDashboard() {
                         placeholder="Ex: Corte, Barba"
                         className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2"
                       />
-                      <div className="flex flex-wrap gap-2">
-                         {services.map(s => {
-                           let temp = editingServicesBooking.serviceId;
-                           const parsed: string[] = [];
-                           const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-                           for (const srv of sorted) {
-                              if (temp.includes(srv.name)) {
-                                 parsed.push(srv.name);
-                                 temp = temp.replace(srv.name, '');
-                              }
-                           }
-                           const isSelected = parsed.includes(s.name);
-                           return (
-                             <button
-                               key={s.id}
-                               type="button"
-                               onClick={() => {
-                                 setEditingServicesBooking(prev => {
-                                   if (!prev) return prev;
-                                   let curStr = prev.serviceId;
-                                   if (parsed.includes(s.name)) {
-                                      curStr = curStr.replace(s.name, '').replace(/,\s*,/g, ', ').replace(/(^,\s*)|(\s*,$)/g, '').trim();
-                                   } else {
-                                      curStr = curStr ? curStr + ', ' + s.name : s.name;
-                                   }
-                                   return { ...prev, serviceId: curStr };
-                                 });
-                               }}
-                               className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                             >
-                               {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
-                               {s.name}
-                             </button>
-                           );
-                         })}
-                      </div>
+                      <div className="flex flex-col gap-2">
+                         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                           {services.map(s => {
+                             const parsedNames = parseServiceString(editingServicesBooking.serviceId).map(ps => ps.name.trim().toLowerCase());
+                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
+                             return (
+                               <button
+                                 key={s.id}
+                                 type="button"
+                                 onClick={() => {
+                                   setEditingServicesBooking(prev => {
+                                     if (!prev) return prev;
+                                     let parsed = parseServiceString(prev.serviceId);
+                                     if (isSelected) {
+                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
+                                     } else {
+                                       parsed.push({ quantity: 1, name: s.name });
+                                     }
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
+                                   });
+                                 }}
+                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                               >
+                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
+                                 {s.name}
+                               </button>
+                             );
+                           })}
+                         </div>
+                         {parseServiceString(editingServicesBooking.serviceId).filter(ps => {
+                            const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
+                            return s?.isProduct;
+                         }).map(ps => (
+                            <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
+                              <label className="text-xs text-white/70 font-bold flex justify-between">
+                                <span>Quantidade: {ps.name}</span>
+                                <span className="text-gold">R$ {
+                                  ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                                }</span>
+                              </label>
+                              <div className="flex items-center gap-3">
+                                <button 
+                                  type="button" 
+                                  onClick={() => {
+                                    setEditingServicesBooking(prev => {
+                                      if (!prev) return prev;
+                                      let parsed = parseServiceString(prev.serviceId);
+                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                      if (existing) {
+                                        existing.quantity -= 1;
+                                        if (existing.quantity <= 0) {
+                                          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
+                                        }
+                                      }
+                                      return { ...prev, serviceId: stringifyServices(parsed) };
+                                    });
+                                  }}
+                                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                                >
+                                  -
+                                </button>
+                                <span className="w-8 text-center text-white font-bold">{ps.quantity}</span>
+                                <button 
+                                  type="button" 
+                                  onClick={() => {
+                                    setEditingServicesBooking(prev => {
+                                      if (!prev) return prev;
+                                      let parsed = parseServiceString(prev.serviceId);
+                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                      if (existing) existing.quantity += 1;
+                                      return { ...prev, serviceId: stringifyServices(parsed) };
+                                    });
+                                  }}
+                                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                         ))}
+                       </div>
                     </div>
 
                     <div className="pt-4 flex justify-end gap-3">

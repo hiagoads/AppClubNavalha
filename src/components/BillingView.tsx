@@ -15,7 +15,7 @@ import {
 import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
-import { formatTime, parsePrice } from '../utils';
+import { formatTime, parsePrice, parseServiceString, stringifyServices } from '../utils';
 
 type PeriodType = 'day' | 'week' | 'month' | 'period';
 
@@ -47,19 +47,17 @@ export default function BillingView() {
      if (b.price !== undefined && b.price !== null && parsePrice(b.price) > 0) return parsePrice(b.price);
      if (b.expectedPrice !== undefined && b.expectedPrice !== null && parsePrice(b.expectedPrice) > 0) return parsePrice(b.expectedPrice);
      if (!b.serviceId) return 0;
-     const names = b.serviceId.split(',').map(s => s.trim());
+     const parsedServices = parseServiceString(b.serviceId);
      let total = 0;
-     names.forEach(n => {
+     parsedServices.forEach(ps => {
        const s = services.find(srv => 
-         srv.name.trim().toLowerCase() === n.trim().toLowerCase() || 
-         srv.id === n
+         srv.name.trim().toLowerCase() === ps.name.toLowerCase() || 
+         srv.id === ps.name
        );
        if (s) {
          const promo = parsePrice(s.promoPrice);
          const reg = parsePrice(s.price);
-         total += (promo > 0) ? promo : reg;
-       } else {
-         total += 0; 
+         total += ((promo > 0) ? promo : reg) * ps.quantity;
        }
      });
      return total;
@@ -67,15 +65,14 @@ export default function BillingView() {
 
   const recalculatedPrice = (selectedServiceNames: string) => {
      if (!selectedServiceNames) return 0;
-     let temp = selectedServiceNames;
+     const parsedServices = parseServiceString(selectedServiceNames);
      let total = 0;
-     const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-     sorted.forEach(s => {
-       if (temp.includes(s.name)) {
-         temp = temp.replace(s.name, '');
+     parsedServices.forEach(ps => {
+       const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+       if (s) {
          const promo = parsePrice(s.promoPrice);
          const reg = parsePrice(s.price);
-         total += (promo > 0) ? promo : reg;
+         total += ((promo > 0) ? promo : reg) * ps.quantity;
        }
      });
      return total;
@@ -236,26 +233,43 @@ export default function BillingView() {
 
   const dailyData = getChartData();
 
-  const parsedServiceNames = (() => {
-     let temp = editData.serviceId;
-     const result: string[] = [];
-     const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-     for (const s of sorted) {
-        if (temp.includes(s.name)) {
-           result.push(s.name);
-           temp = temp.replace(s.name, '');
-        }
-     }
-     return result;
-  })();
+  const parsedServiceNames = parseServiceString(editData.serviceId).map(ps => ps.name.trim().toLowerCase());
 
-  const toggleService = (sName: string) => {
-    let newStr = editData.serviceId;
-    if (parsedServiceNames.includes(sName)) {
-       newStr = newStr.replace(sName, '').replace(/,\s*,/g, ', ').replace(/(^,\s*)|(\s*,$)/g, '').trim();
+  const toggleService = (sName: string, isProduct: boolean | undefined = false) => {
+    let parsed = parseServiceString(editData.serviceId);
+    let existing = parsed.find(p => p.name.trim().toLowerCase() === sName.trim().toLowerCase());
+    
+    if (existing) {
+       // if it's already there
+       if (isProduct) {
+          // just let it be handled by a quantity input, or increment if clicked?
+          // wait, for products maybe they can change quantity elsewhere.
+          // toggle means remove it for simplicity if we handle qty via buttons.
+          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== sName.trim().toLowerCase());
+       } else {
+          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== sName.trim().toLowerCase());
+       }
     } else {
-       newStr = newStr ? newStr + ', ' + sName : sName;
+       parsed.push({ quantity: 1, name: sName });
     }
+    const newStr = stringifyServices(parsed);
+    setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });
+  };
+  
+  const updateProductQuantity = (sName: string, qtyStr: string) => {
+    const qty = parseInt(qtyStr, 10);
+    let parsed = parseServiceString(editData.serviceId);
+    if (isNaN(qty) || qty <= 0) {
+      parsed = parsed.filter(p => p.name !== sName);
+    } else {
+      let existing = parsed.find(p => p.name === sName);
+      if (existing) {
+        existing.quantity = qty;
+      } else {
+        parsed.push({ quantity: qty, name: sName });
+      }
+    }
+    const newStr = stringifyServices(parsed);
     setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });
   };
 
@@ -457,14 +471,15 @@ export default function BillingView() {
                     placeholder="Ex: Corte, Barba"
                     className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2"
                   />
-                  <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                  <div className="flex flex-col gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
+                     <div className="flex flex-wrap gap-2">
                      {services.map(s => {
-                        const isSelected = parsedServiceNames.includes(s.name);
+                        const isSelected = parsedServiceNames.includes(s.name.trim().toLowerCase());
                         return (
                           <button
                             key={s.id}
                             type="button"
-                            onClick={() => toggleService(s.name)}
+                            onClick={() => toggleService(s.name, s.isProduct)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${isSelected ? 'bg-gold/20 border-gold/50 text-gold' : 'bg-carbon border-white/10 text-white/50 hover:border-white/30'} flex items-center gap-2`}
                           >
                             {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
@@ -472,6 +487,54 @@ export default function BillingView() {
                           </button>
                         );
                      })}
+                     </div>
+                     {parseServiceString(editData.serviceId).filter(ps => {
+                        const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
+                        return s?.isProduct;
+                     }).map(ps => (
+                        <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
+                          <label className="text-xs text-white/70 font-bold flex justify-between">
+                            <span>Quantidade: {ps.name}</span>
+                            <span className="text-gold">R$ {
+                              ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                            }</span>
+                          </label>
+                          <div className="flex items-center gap-3">
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                let parsed = parseServiceString(editData.serviceId);
+                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                if (existing) {
+                                  existing.quantity -= 1;
+                                  if (existing.quantity <= 0) {
+                                    parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
+                                  }
+                                }
+                                const newStr = stringifyServices(parsed);
+                                setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });
+                              }}
+                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                            >
+                              -
+                            </button>
+                            <span className="w-8 text-center text-white font-bold">{ps.quantity}</span>
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                let parsed = parseServiceString(editData.serviceId);
+                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                if (existing) existing.quantity += 1;
+                                const newStr = stringifyServices(parsed);
+                                setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });
+                              }}
+                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                     ))}
                   </div>
                 </div>
 

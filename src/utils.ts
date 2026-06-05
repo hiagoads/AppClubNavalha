@@ -6,6 +6,23 @@ export function parsePrice(val: any): number {
   }
   return 0;
 }
+
+export function parseServiceString(serviceStr: string) {
+  if (!serviceStr) return [];
+  const items = serviceStr.split(',').map(s => s.trim()).filter(Boolean);
+  return items.map(item => {
+    const match = item.match(/^(\d+)x\s*(.*)$/i);
+    if (match) {
+      return { quantity: parseInt(match[1], 10), name: match[2].trim() };
+    }
+    return { quantity: 1, name: item };
+  });
+}
+
+export function stringifyServices(parsed: {quantity: number, name: string}[]) {
+  return parsed.map(p => p.quantity > 1 ? `${p.quantity}x ${p.name}` : p.name).join(', ');
+}
+
 export function formatTime(totalMinutes: number): string {
   if (!totalMinutes || totalMinutes < 0) return '0 min';
   if (totalMinutes < 60) return `${Math.floor(totalMinutes)} min`;

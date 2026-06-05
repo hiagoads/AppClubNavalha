@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Booking, Service, BarberBreak } from '../types';
+import { parseServiceString } from '../utils';
 
 export function useQueueTimers(
   activeBooking: Booking | null | undefined, 
@@ -49,16 +50,16 @@ export function useQueueTimers(
     
     // Find service duration (handle multiple)
     let baseDuration = 0;
-    let temp = activeBooking.serviceId;
+    const parsedServices = parseServiceString(activeBooking.serviceId);
     let foundAny = false;
-    const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-    sorted.forEach(s => {
-       if (temp.includes(s.name)) {
-          temp = temp.replace(s.name, '');
-          baseDuration += s.duration || 30;
-          foundAny = true;
-       }
+    parsedServices.forEach(ps => {
+      const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || ps.name.toLowerCase().includes(srv.name.toLowerCase()));
+      if (s) {
+        baseDuration += (s.duration || 30) * ps.quantity;
+        foundAny = true;
+      }
     });
+
     if (!foundAny) {
       baseDuration = 30; // Default
     }
@@ -88,15 +89,14 @@ export function useQueueTimers(
 
   const getDuration = (b: Booking) => {
     let d = 0;
-    let temp = b.serviceId;
+    const parsedServices = parseServiceString(b.serviceId);
     let foundAny = false;
-    const sorted = [...services].sort((a,b) => b.name.length - a.name.length);
-    sorted.forEach(s => {
-       if (temp.includes(s.name)) {
-          temp = temp.replace(s.name, '');
-          d += s.duration || 30;
-          foundAny = true;
-       }
+    parsedServices.forEach(ps => {
+      const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || ps.name.toLowerCase().includes(srv.name.toLowerCase()));
+      if (s) {
+        d += (s.duration || 30) * ps.quantity;
+        foundAny = true;
+      }
     });
     if (!foundAny) d = 30;
     return d;

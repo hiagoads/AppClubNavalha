@@ -37,7 +37,7 @@ service cloud.firestore {
       allow update: if 
         isAdmin() || 
         (
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime'])
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime', 'serviceId', 'expectedPrice'])
         );
       
       allow delete: if isAdmin();
