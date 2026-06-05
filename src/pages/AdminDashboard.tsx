@@ -103,7 +103,7 @@ export default function AdminDashboard() {
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClientData.name || !newClientData.whatsapp) return;
-    if (newClientData.serviceIds.length === 0) {
+    if (newClientData.serviceId.trim() === '') {
       toast.error("Selecione pelo menos um serviço");
       return;
     }
