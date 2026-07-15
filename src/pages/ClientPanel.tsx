@@ -21,12 +21,27 @@ export const getServicePrice = (s: any) => {
 };
 
 import { useBarbers } from '../hooks/useBarbers';
+import { LoadingOverlay } from '../components/LoadingOverlay';
 
 export default function ClientPanel() {
-  const { queue, activeBooking, loading } = useQueue();
+  const { queue, activeBookings, loading } = useQueue();
   const { barbers } = useBarbers();
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [formType, setFormType] = useState<'walk-in' | 'scheduled'>('walk-in');
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const withProcessing = (fn: any) => {
+    return async (...args: any[]) => {
+      if (args[0] && args[0].preventDefault) args[0].preventDefault();
+      if (isProcessing) return;
+      setIsProcessing(true);
+      try {
+        await fn(...args);
+      } finally {
+        setIsProcessing(false);
+      }
+    };
+  };
   const [showMenu, setShowMenu] = useState(false);
   const [myBookingId, setMyBookingId] = useState(localStorage.getItem('myBookingId'));
   // Receipt state
@@ -43,7 +58,7 @@ export default function ClientPanel() {
   const [services, setServices] = useState<Service[]>([]);
   const { breaks } = useBreaks();
   const { isOpen, schedulingFee, scheduleHours } = useSettings();
-  const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals } = useQueueTimers(activeBooking, queue, services, breaks);
+  const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals, allOccupiedIntervals } = useQueueTimers(activeBookings, queue, services, breaks, barbers);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -86,10 +101,7 @@ export default function ClientPanel() {
       }
     }
     
-    const occupied = Object.values(queueIntervals);
-    if (activeBooking) {
-      occupied.push({ start: Date.now(), end: Date.now() + activeRemainingMinutes * 60000 });
-    }
+    const occupied = allOccupiedIntervals || [];
     
     return slots.filter(slotStr => {
         const [h, m] = slotStr.split(':').map(Number);
@@ -245,7 +257,7 @@ export default function ClientPanel() {
     try {
       let expectedPriceLocal = 0;
       parseServiceString(editingServices.serviceId).forEach(ps => {
-         const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+         const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
          if (s) {
            expectedPriceLocal += getServicePrice(s) * ps.quantity;
          }
@@ -349,8 +361,7 @@ export default function ClientPanel() {
     }
   };
 
-  const myBooking = sortedQueue?.find(b => b.id === myBookingId) || 
-                  (activeBooking?.id === myBookingId ? activeBooking : null);
+  const myBooking = sortedQueue?.find(b => b.id === myBookingId) || activeBookings?.find(b => b.id === myBookingId);
   const myPosition = myBooking ? sortedQueue?.findIndex(b => b.id === myBookingId) + 1 : -1;
   const myWaitTime = myBookingId ? (queueWaitTimes[myBookingId] || 0) : 0;
 
@@ -486,7 +497,7 @@ export default function ClientPanel() {
                <div className="flex flex-col gap-2">
                  {myBooking.status === BookingStatus.WAITING && (
                    <button 
-                     onClick={handleCheckIn}
+                     onClick={withProcessing(handleCheckIn)}
                      className="w-full bg-gold/10 hover:bg-gold/20 text-gold border border-gold/30 py-2 sm:py-3 rounded-xl font-bold flex items-center justify-center gap-2 text-xs sm:text-sm transition-colors"
                    >
                      <Users className="w-4 h-4 shrink-0" />
@@ -496,7 +507,7 @@ export default function ClientPanel() {
 
                  {myBooking.status === BookingStatus.CHECKING_IN && (
                    <button 
-                     onClick={handleUndoCheckIn}
+                     onClick={withProcessing(handleUndoCheckIn)}
                      className="w-full bg-green-500/10 text-green-500 border border-green-500/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-colors group"
                    >
                      <CheckCircle2 className="w-4 h-4 group-hover:hidden" />
@@ -508,7 +519,7 @@ export default function ClientPanel() {
                  
                  {myBooking.status !== BookingStatus.IN_SERVICE && (
                    <button 
-                     onClick={handleWithdraw}
+                     onClick={withProcessing(handleWithdraw)}
                      className={`w-full ${confirmingCancel ? 'bg-red-500 font-bold text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 font-bold'} border border-red-500/30 py-2 rounded-xl flex items-center justify-center transition-colors text-xs`}
                    >
                      {confirmingCancel ? 'TEM CERTEZA? CLIQUE AQUI' : 'CANCELAR ATENDIMENTO'}
@@ -527,29 +538,35 @@ export default function ClientPanel() {
           </section>
         )}
 
-        {/* Active Session */}
-        {activeBooking && (
+                {/* Active Session */}
+        {activeBookings && activeBookings.length > 0 && (
           <section>
             <h2 className="text-xs uppercase tracking-widest text-gold mb-3 font-semibold px-2">Agora Atendendo</h2>
-            <div className="glass-card p-6 border-gold/30 bg-gold/5 relative overflow-hidden">
-               <div className="absolute top-0 right-0 p-2">
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gold opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-gold"></span>
-                  </span>
-               </div>
-               <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full bg-gold/20 flex items-center justify-center text-gold font-bold text-xl">
-                    {activeBooking.clientName[0]}
-                  </div>
-                  <div>
-                    <h3 className="font-display text-xl font-bold">{activeBooking.clientName}</h3>
-                    <p className="text-white/40 text-sm flex items-center gap-1">
-                      <Clock className="w-3 h-3" /> 
-                      {activeBooking.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes)}` : "Iniciando..."}
-                    </p>
-                  </div>
-               </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+               {activeBookings.map(ab => (
+                 <div key={ab.id} className="glass-card p-6 border-gold/30 bg-gold/5 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-2">
+                       <span className="flex h-2 w-2 relative">
+                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gold opacity-75"></span>
+                         <span className="relative inline-flex rounded-full h-2 w-2 bg-gold"></span>
+                       </span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                       <div className="w-12 h-12 rounded-full bg-gold/20 flex items-center justify-center text-gold font-bold text-xl">
+                         {ab.clientName[0]}
+                       </div>
+                       <div className="flex-1 min-w-0">
+                         <h3 className="font-display text-xl font-bold truncate">{ab.clientName}</h3>
+                         <div className="flex items-center gap-2">
+                           <p className="text-white/40 text-sm flex items-center gap-1 truncate">
+                             <Clock className="w-3 h-3" /> 
+                             {ab.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes[ab.id] || 0)}` : "Iniciando..."}
+                           </p>
+                         </div>
+                       </div>
+                    </div>
+                 </div>
+               ))}
             </div>
           </section>
         )}
@@ -713,7 +730,7 @@ export default function ClientPanel() {
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={withProcessing(handleSubmit)} className="space-y-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Nome Completo</label>
                   <div className="relative">
@@ -906,7 +923,7 @@ export default function ClientPanel() {
                     <h2 className="text-xl font-display font-bold">Editar Serviços</h2>
                   </div>
 
-                  <form onSubmit={handleUpdateServices} className="space-y-4">
+                  <form onSubmit={withProcessing(handleUpdateServices)} className="space-y-4">
                     <div className="space-y-2">
                        <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
                        <div className="flex flex-col gap-2">
@@ -1047,6 +1064,7 @@ export default function ClientPanel() {
         )}
       </AnimatePresence>
 
+      <LoadingOverlay isVisible={isProcessing} />
       {/* Floating WhatsApp Contact Button */}
       <a
         href="https://wa.me/5581992941597"

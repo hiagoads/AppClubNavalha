@@ -1,7 +1,17 @@
 export function parsePrice(val: any): number {
   if (typeof val === 'number') return val;
   if (typeof val === 'string') {
-    const parsed = parseFloat(val.replace(',', '.'));
+    let cleaned = val.replace(/[^\d.,]/g, '');
+    const lastCommaIndex = cleaned.lastIndexOf(',');
+    const lastDotIndex = cleaned.lastIndexOf('.');
+    const lastSeparatorIndex = Math.max(lastCommaIndex, lastDotIndex);
+    
+    if (lastSeparatorIndex !== -1) {
+       const before = cleaned.substring(0, lastSeparatorIndex).replace(/[.,]/g, '');
+       const after = cleaned.substring(lastSeparatorIndex + 1).replace(/[.,]/g, '');
+       cleaned = before + '.' + after;
+    }
+    const parsed = parseFloat(cleaned);
     return isNaN(parsed) ? 0 : parsed;
   }
   return 0;

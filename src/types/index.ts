@@ -45,6 +45,7 @@ export interface Booking {
   clientWhatsapp: string;
   serviceId: string;
   barberId: string; // 'any' or specific ID
+  originalBarberId?: string;
   type: BookingType;
   scheduledTime?: string;
   scheduledDate?: string;

@@ -115,7 +115,7 @@ export default function AdminDashboard() {
     let expectedPrice = isScheduled ? Number(schedulingFee) : 0;
     const parsedServices = parseServiceString(newClientData.serviceId);
     parsedServices.forEach(ps => {
-      const s = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
+      const s = services.find(x => x.name.trim().toLowerCase() === ps.name.toLowerCase() || x.id === ps.name);
       if (s) {
         expectedPrice += getServicePrice(s) * ps.quantity;
       }
@@ -209,7 +209,7 @@ export default function AdminDashboard() {
       } else if (activeInfo && activeInfo.serviceId) {
         const parsedServices = parseServiceString(activeInfo.serviceId);
         parsedServices.forEach(ps => {
-           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
+           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
            if (s) {
               const promo = parsePrice(s.promoPrice);
               const reg = parsePrice(s.price);
@@ -786,14 +786,14 @@ export default function AdminDashboard() {
                            })}
                         </div>
                         {parseServiceString(newClientData.serviceId).filter(ps => {
-                           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
                            return s?.isProduct;
                         }).map(ps => (
                            <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
                              <label className="text-xs text-white/70 font-bold flex justify-between">
                                <span>Quantidade: {ps.name}</span>
                                <span className="text-gold">R$ {
-                                 ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                                 ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
                                }</span>
                              </label>
                              <div className="flex items-center gap-3">
@@ -802,11 +802,11 @@ export default function AdminDashboard() {
                                  onClick={() => {
                                    setNewClientData(prev => {
                                      let parsed = parseServiceString(prev.serviceId);
-                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
                                      if (existing) {
                                        existing.quantity -= 1;
                                        if (existing.quantity <= 0) {
-                                         parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.trim().toLowerCase());
+                                         parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
                                        }
                                      }
                                      return { ...prev, serviceId: stringifyServices(parsed) };
@@ -822,7 +822,7 @@ export default function AdminDashboard() {
                                  onClick={() => {
                                    setNewClientData(prev => {
                                      let parsed = parseServiceString(prev.serviceId);
-                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
                                      if (existing) existing.quantity += 1;
                                      return { ...prev, serviceId: stringifyServices(parsed) };
                                    });
@@ -843,7 +843,7 @@ export default function AdminDashboard() {
                           <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
                           <span className="text-gold font-bold text-xl">
                             R$ {parseServiceString(newClientData.serviceId).reduce((acc, ps) => {
-                              const s = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
+                              const s = services.find(x => x.name.trim().toLowerCase() === ps.name.toLowerCase() || x.id === ps.name);
                               if (!s) return acc;
                               return acc + (getServicePrice(s) * ps.quantity);
                             }, newClientData.type === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
@@ -969,21 +969,16 @@ export default function AdminDashboard() {
                   <form onSubmit={withProcessing(handleUpdateServices)} className="space-y-4">
                     <div className="space-y-2">
                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços / Produtos</label>
-                      <input type="text" value={editingServicesBooking.serviceId} onChange={(e) => { const newVal = e.target.value; let newPrice = 0; parseServiceString(newVal).forEach(ps => { const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name); if (srv) { const promo = parsePrice(srv.promoPrice); const reg = parsePrice(srv.price); newPrice += ((promo > 0) ? promo : reg) * ps.quantity; } }); setEditingServicesBooking(prev => prev ? { ...prev, serviceId: newVal, expectedPrice: newPrice } : prev); }} placeholder="Ex: Corte, Barba" className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2" />
-                      
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold mt-4 block">Valor Total (R$)</label>
                       <input
-                        type="number"
-                        step="0.01"
-                        value={editingServicesBooking.expectedPrice}
+                        type="text"
+                        value={editingServicesBooking.serviceId}
                         onChange={(e) => {
-                           setEditingServicesBooking(prev => prev ? { ...prev, expectedPrice: e.target.value } : prev);
+                           setEditingServicesBooking(prev => prev ? { ...prev, serviceId: e.target.value } : prev);
                         }}
-                        placeholder="Valor total"
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2 font-mono"
+                        placeholder="Ex: Corte, Barba"
+                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2"
                       />
-
-                      <div className="flex flex-col gap-2 mt-4">
+                      <div className="flex flex-col gap-2">
                          <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
                            {services.map(s => {
                              const parsedNames = parseServiceString(editingServicesBooking.serviceId).map(ps => ps.name.trim().toLowerCase());
@@ -1001,19 +996,7 @@ export default function AdminDashboard() {
                                      } else {
                                        parsed.push({ quantity: 1, name: s.name });
                                      }
-                                     
-                                     // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-                                     
-                                     return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
+                                     return { ...prev, serviceId: stringifyServices(parsed) };
                                    });
                                  }}
                                  className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
@@ -1025,14 +1008,14 @@ export default function AdminDashboard() {
                            })}
                          </div>
                          {parseServiceString(editingServicesBooking.serviceId).filter(ps => {
-                            const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                            const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
                             return s?.isProduct;
                          }).map(ps => (
                             <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
                               <label className="text-xs text-white/70 font-bold flex justify-between">
                                 <span>Quantidade: {ps.name}</span>
                                 <span className="text-gold">R$ {
-                                  ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                                  ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
                                 }</span>
                               </label>
                               <div className="flex items-center gap-3">
@@ -1042,26 +1025,14 @@ export default function AdminDashboard() {
                                     setEditingServicesBooking(prev => {
                                       if (!prev) return prev;
                                       let parsed = parseServiceString(prev.serviceId);
-                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
                                       if (existing) {
                                         existing.quantity -= 1;
                                         if (existing.quantity <= 0) {
-                                          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.trim().toLowerCase());
+                                          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
                                         }
                                       }
-                                      
-                                      // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-
-                                      return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
+                                      return { ...prev, serviceId: stringifyServices(parsed) };
                                     });
                                   }}
                                   className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
@@ -1075,21 +1046,9 @@ export default function AdminDashboard() {
                                     setEditingServicesBooking(prev => {
                                       if (!prev) return prev;
                                       let parsed = parseServiceString(prev.serviceId);
-                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
+                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
                                       if (existing) existing.quantity += 1;
-                                      
-                                      // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-
-                                      return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
+                                      return { ...prev, serviceId: stringifyServices(parsed) };
                                     });
                                   }}
                                   className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
@@ -1112,9 +1071,9 @@ export default function AdminDashboard() {
                       </button>
                       <button
                         type="submit"
-                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors flex items-center gap-2"
+                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors"
                       >
-                        Salvar Alterações
+                        Atualizar
                       </button>
                     </div>
                   </form>
@@ -1150,9 +1109,6 @@ export default function AdminDashboard() {
                               <h3 className="text-2xl font-display font-bold truncate">{activeB.clientName}</h3>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="text-gold text-sm font-medium truncate">{activeB.serviceId}</p>
-                                <span className="text-green-400 font-bold text-sm bg-green-400/10 px-2 py-0.5 rounded ml-2">
-                                  R$ {Number(activeB.expectedPrice || 0).toFixed(2)}
-                                </span>
                                 <button onClick={() => setEditingServicesBooking({id: activeB.id, serviceId: activeB.serviceId, expectedPrice: activeB.expectedPrice})} className="text-white/40 hover:text-white p-1 shrink-0">
                                   <Edit2 className="w-3 h-3" />
                                 </button>
@@ -1264,9 +1220,6 @@ export default function AdminDashboard() {
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
                             <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
                               <span className="truncate">{item.serviceId}</span>
-                              <span className="text-green-400 font-bold text-xs bg-green-400/10 px-1.5 py-0.5 rounded ml-2">
-                                R$ {Number(item.expectedPrice || 0).toFixed(2)}
-                              </span>
                               <button onClick={() => setEditingServicesBooking({id: item.id, serviceId: item.serviceId, expectedPrice: item.expectedPrice})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">
                                 <Edit2 className="w-3 h-3" />
                               </button>

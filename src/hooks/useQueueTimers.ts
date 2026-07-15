@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Booking, Service, BarberBreak } from '../types';
+import { Booking, Service, BarberBreak, Barber } from '../types';
 import { parseServiceString } from '../utils';
 
 export function useQueueTimers(
-  activeBooking: Booking | null | undefined, 
+  activeBookings: Booking[], 
   queue: Booking[], 
   services: Service[],
-  breaks: BarberBreak[] = []
+  breaks: BarberBreak[] = [],
+  barbers: Barber[] = []
 ) {
   const [now, setNow] = useState(Date.now());
 
@@ -16,76 +17,6 @@ export function useQueueTimers(
     }, 60000); // update every minute
     return () => clearInterval(interval);
   }, []);
-
-  // Calculate active booking remaining time
-  let activeRemainingMinutes = 0;
-  
-  if (activeBooking && activeBooking.serviceStartTime) {
-    let startTimeMillis = Date.now();
-    if (typeof (activeBooking.serviceStartTime as any).toMillis === 'function') {
-      startTimeMillis = (activeBooking.serviceStartTime as any).toMillis();
-    } else if (typeof activeBooking.serviceStartTime === 'string') {
-      startTimeMillis = new Date(activeBooking.serviceStartTime).getTime();
-    } else if (typeof activeBooking.serviceStartTime === 'number') {
-      startTimeMillis = activeBooking.serviceStartTime;
-    }
-
-    let calculationNow = now;
-    if (activeBooking.status === 'paused' && activeBooking.pausedAt) {
-      if (typeof (activeBooking.pausedAt as any).toMillis === 'function') {
-        calculationNow = (activeBooking.pausedAt as any).toMillis();
-      } else if (typeof activeBooking.pausedAt === 'string') {
-        calculationNow = new Date(activeBooking.pausedAt).getTime();
-      } else if (typeof activeBooking.pausedAt === 'number') {
-        calculationNow = activeBooking.pausedAt;
-      }
-    }
-
-    let elapsedMillis = calculationNow - startTimeMillis;
-    if (activeBooking.totalPausedDuration) {
-      elapsedMillis -= activeBooking.totalPausedDuration;
-    }
-
-    const elapsedMinutes = Math.floor(elapsedMillis / 60000);
-    
-    // Find service duration (handle multiple)
-    let baseDuration = 0;
-    const parsedServices = parseServiceString(activeBooking.serviceId);
-    let foundAny = false;
-    parsedServices.forEach(ps => {
-      const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || ps.name.toLowerCase().includes(srv.name.toLowerCase()));
-      if (s) {
-        baseDuration += (s.duration || 30) * ps.quantity;
-        foundAny = true;
-      }
-    });
-
-    if (!foundAny) {
-      baseDuration = 30; // Default
-    }
-    
-    // If time running out (elapsed > baseDuration), add 5 mins buffer
-    let expectedDuration = baseDuration;
-    if (elapsedMinutes >= baseDuration) {
-      const overtime = elapsedMinutes - baseDuration;
-      expectedDuration = baseDuration + Math.ceil(overtime / 5) * 5;
-      if (expectedDuration === elapsedMinutes) {
-         expectedDuration += 5; // ensure it is always strictly adding 5 mins
-      }
-    }
-    activeRemainingMinutes = Math.max(0, expectedDuration - elapsedMinutes);
-  }
-
-  // Dynamic sorting algorithm
-  const getMillis = (dateObj: any) => {
-     let time = Date.now(); // Default to now for pending serverTimestamp()
-     if (dateObj) {
-        if (typeof dateObj.toMillis === 'function') time = dateObj.toMillis();
-        else if (typeof dateObj === 'string') time = new Date(dateObj).getTime();
-        else if (typeof dateObj === 'number') time = dateObj;
-     }
-     return time;
-  };
 
   const getDuration = (b: Booking) => {
     let d = 0;
@@ -102,6 +33,16 @@ export function useQueueTimers(
     return d;
   };
 
+  const getMillis = (dateObj: any) => {
+     let time = Date.now(); 
+     if (dateObj) {
+        if (typeof dateObj.toMillis === 'function') time = dateObj.toMillis();
+        else if (typeof dateObj === 'string') time = new Date(dateObj).getTime();
+        else if (typeof dateObj === 'number') time = dateObj;
+     }
+     return time;
+  };
+
   const getSchedTime = (b: any) => {
     if (!b.scheduledTime) return Infinity;
     const [h, m] = b.scheduledTime.split(':').map(Number);
@@ -114,20 +55,66 @@ export function useQueueTimers(
     return d.getTime();
   };
 
-  const getPriority = (b: any) => {
-     if (b.priority) return b.priority;
-     if (b.type === 'scheduled') return getSchedTime(b);
-     return getMillis(b.createdAt);
-  };
+  const activeRemainingMinutes: Record<string, number> = {};
+  const barberAvailability: Record<string, number> = {};
 
-  let currentSimTime = now + (activeRemainingMinutes * 60000);
+  // Initialize barber availability
+  barbers.filter(b => b.isActive).forEach(barber => {
+     barberAvailability[barber.id] = now;
+  });
+
+  // Process active bookings
+  activeBookings.forEach(ab => {
+    if (!ab.serviceStartTime) return;
+    let startTimeMillis = getMillis(ab.serviceStartTime);
+    
+    let calculationNow = now;
+    if (ab.status === 'paused' && ab.pausedAt) {
+      calculationNow = getMillis(ab.pausedAt);
+    }
+
+    let elapsedMillis = calculationNow - startTimeMillis;
+    if (ab.totalPausedDuration) {
+      elapsedMillis -= ab.totalPausedDuration;
+    }
+
+    const elapsedMinutes = Math.floor(elapsedMillis / 60000);
+    const baseDuration = getDuration(ab);
+    
+    let expectedDuration = baseDuration;
+    if (elapsedMinutes >= baseDuration) {
+      const overtime = elapsedMinutes - baseDuration;
+      expectedDuration = baseDuration + Math.ceil(overtime / 5) * 5;
+      if (expectedDuration === elapsedMinutes) {
+         expectedDuration += 5;
+      }
+    }
+
+    const remainingMins = Math.max(0, expectedDuration - elapsedMinutes);
+    activeRemainingMinutes[ab.id] = remainingMins;
+    
+    if (ab.barberId && barberAvailability[ab.barberId] !== undefined) {
+      barberAvailability[ab.barberId] = now + (remainingMins * 60000);
+    } else {
+      // If a barber is disabled or deleted but has an active booking, 
+      // we could add it back, but let's just ignore for queue calculation.
+    }
+  });
+
   const queueWaitTimes: Record<string, number> = {};
   const queueIntervals: Record<string, { start: number; end: number }> = {};
   const exactStartTimes: Record<string, number> = {};
-  const occupiedIntervals: { start: number; end: number; id: string }[] = [];
   
+  const barberOccupiedIntervals: Record<string, { start: number; end: number; id: string }[]> = {};
+  barbers.filter(b => b.isActive).forEach(barber => {
+     barberOccupiedIntervals[barber.id] = [];
+  });
+
+  // Assign breaks to corresponding barbers
   for (const b of breaks) {
-      occupiedIntervals.push({ start: b.startTime, end: b.startTime + (b.duration * 60000), id: b.id });
+     if (barberOccupiedIntervals[b.barberId]) {
+        barberOccupiedIntervals[b.barberId].push({ start: b.startTime, end: b.startTime + (b.duration * 60000), id: b.id });
+     }
   }
 
   const findNextGap = (start: number, duration: number, existingIntervals: {start: number, end: number}[]) => {
@@ -145,46 +132,67 @@ export function useQueueTimers(
       return current;
   };
 
-  // 1. Determine solid strict order first
   const sortedQueue = [...queue].sort((a, b) => {
-      // Manually sorted fully overrides
       if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority;
       if (a.priority !== undefined && b.priority === undefined) return -1;
       if (a.priority === undefined && b.priority !== undefined) return 1;
-
-      // Sort by chronological time target
+      
       const aTime = a.type === 'scheduled' ? getSchedTime(a) : getMillis(a.createdAt);
       const bTime = b.type === 'scheduled' ? getSchedTime(b) : getMillis(b.createdAt);
-
       if (aTime !== bTime) return aTime - bTime;
-      
-      // Fallback
+            
       if (a.type === 'scheduled' && b.type !== 'scheduled') return -1;
       if (a.type !== 'scheduled' && b.type === 'scheduled') return 1;
       return 0;
   });
 
-  // 2. Compute exactStartTimes sequentially based entirely on this strict sorted order
-  let simTimeSequential = currentSimTime;
   for (const item of sortedQueue) {
       const durationMs = getDuration(item) * 60000;
+      let targetBarberId = item.barberId;
       
-      let proposedStart = simTimeSequential;
-      if (item.type === 'scheduled') {
-          // A scheduled item won't be pushed BEFORE its officially scheduled time
-          proposedStart = Math.max(simTimeSequential, getSchedTime(item));
+      let actualStart = Infinity;
+      let assignedBarberId = targetBarberId;
+      
+      // If it's a specific barber, calculate only for them
+      if (targetBarberId && targetBarberId !== 'any' && barberAvailability[targetBarberId] !== undefined) {
+          let proposedStart = barberAvailability[targetBarberId];
+          if (item.type === 'scheduled') {
+              proposedStart = Math.max(proposedStart, getSchedTime(item));
+          }
+          actualStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[targetBarberId]);
+      } else {
+          // If 'any' or barber not found, find the earliest available gap among ALL active barbers
+          const activeBarberIds = Object.keys(barberAvailability);
+          if (activeBarberIds.length > 0) {
+             for (const bId of activeBarberIds) {
+                 let proposedStart = barberAvailability[bId];
+                 if (item.type === 'scheduled') {
+                     proposedStart = Math.max(proposedStart, getSchedTime(item));
+                 }
+                 const possibleStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[bId]);
+                 if (possibleStart < actualStart) {
+                     actualStart = possibleStart;
+                     assignedBarberId = bId;
+                 }
+             }
+          } else {
+             // Fallback if no barbers active
+             actualStart = now;
+             assignedBarberId = 'any';
+          }
+      }
+
+      const actualEnd = actualStart + durationMs;
+      if (barberOccupiedIntervals[assignedBarberId]) {
+         barberOccupiedIntervals[assignedBarberId].push({ start: actualStart, end: actualEnd, id: item.id });
+         barberAvailability[assignedBarberId] = actualEnd;
       }
       
-      const actualStart = findNextGap(proposedStart, durationMs, occupiedIntervals);
-      const actualEnd = actualStart + durationMs;
-
-      occupiedIntervals.push({ start: actualStart, end: actualEnd, id: item.id });
       exactStartTimes[item.id] = actualStart;
       queueWaitTimes[item.id] = Math.max(0, Math.floor((actualStart - now) / 60000));
       queueIntervals[item.id] = { start: actualStart, end: actualEnd };
-
-      simTimeSequential = actualEnd; // Always sequentially accumulate
   }
 
-  return { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes };
+  const allOccupiedIntervals = Object.values(barberOccupiedIntervals).flat();
+  return { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes, allOccupiedIntervals };
 }

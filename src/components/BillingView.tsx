@@ -51,7 +51,7 @@ export default function BillingView() {
      let total = 0;
      parsedServices.forEach(ps => {
        const s = services.find(srv => 
-         srv.name.trim().toLowerCase() === ps.name.toLowerCase() || 
+         srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || 
          srv.id === ps.name
        );
        if (s) {
@@ -68,7 +68,7 @@ export default function BillingView() {
      const parsedServices = parseServiceString(selectedServiceNames);
      let total = 0;
      parsedServices.forEach(ps => {
-       const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || srv.id === ps.name);
+       const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
        if (s) {
          const promo = parsePrice(s.promoPrice);
          const reg = parsePrice(s.price);
@@ -489,14 +489,14 @@ export default function BillingView() {
                      })}
                      </div>
                      {parseServiceString(editData.serviceId).filter(ps => {
-                        const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase());
+                        const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
                         return s?.isProduct;
                      }).map(ps => (
                         <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
                           <label className="text-xs text-white/70 font-bold flex justify-between">
                             <span>Quantidade: {ps.name}</span>
                             <span className="text-gold">R$ {
-                              ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase())?.price)) * ps.quantity ).toFixed(2)
+                              ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.price)) * ps.quantity ).toFixed(2)
                             }</span>
                           </label>
                           <div className="flex items-center gap-3">
@@ -504,11 +504,11 @@ export default function BillingView() {
                               type="button" 
                               onClick={() => {
                                 let parsed = parseServiceString(editData.serviceId);
-                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
                                 if (existing) {
                                   existing.quantity -= 1;
                                   if (existing.quantity <= 0) {
-                                    parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.toLowerCase());
+                                    parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.trim().toLowerCase());
                                   }
                                 }
                                 const newStr = stringifyServices(parsed);
@@ -523,7 +523,7 @@ export default function BillingView() {
                               type="button" 
                               onClick={() => {
                                 let parsed = parseServiceString(editData.serviceId);
-                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.toLowerCase());
+                                let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
                                 if (existing) existing.quantity += 1;
                                 const newStr = stringifyServices(parsed);
                                 setEditData({ ...editData, serviceId: newStr, priceOverride: recalculatedPrice(newStr).toString() });

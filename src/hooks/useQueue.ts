@@ -30,8 +30,8 @@ export function useQueue() {
     return () => unsubscribe();
   }, []);
 
-  const activeBooking = bookings.find(b => b.status === BookingStatus.IN_SERVICE || b.status === BookingStatus.PAUSED);
+  const activeBookings = bookings.filter(b => b.status === BookingStatus.IN_SERVICE || b.status === BookingStatus.PAUSED);
   const queue = bookings.filter(b => b.status !== BookingStatus.IN_SERVICE && b.status !== BookingStatus.PAUSED);
 
-  return { bookings, queue, activeBooking, loading };
+  return { bookings, queue, activeBookings, loading };
 }
