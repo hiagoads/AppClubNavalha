@@ -60,6 +60,7 @@ export interface Booking {
   totalPausedDuration?: number;
   expectedPrice?: number | null; 
   price?: number | null; // Snapshotted price after completion
+  isPaid?: boolean;
   // Notification Flags
   notifiedJoined?: boolean;
   notifiedPos2?: boolean;

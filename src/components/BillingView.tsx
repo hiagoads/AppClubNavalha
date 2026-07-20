@@ -12,15 +12,17 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
+import { useBarbers } from '../hooks/useBarbers';
 import { formatTime, parsePrice, parseServiceString, stringifyServices } from '../utils';
 
 type PeriodType = 'day' | 'week' | 'month' | 'period';
 
 export default function BillingView() {
   const { services } = useServices();
+  const { barbers } = useBarbers();
   const [period, setPeriod] = useState<PeriodType>('day');
   const [customStart, setCustomStart] = useState<string>(new Date().toISOString().split('T')[0]);
   const [customEnd, setCustomEnd] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -31,7 +33,7 @@ export default function BillingView() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [isEditingRecord, setIsEditingRecord] = useState(false);
-  const [editData, setEditData] = useState<{ clientName: string, serviceId: string, priceOverride: string }>({ clientName: '', serviceId: '', priceOverride: '' });
+  const [editData, setEditData] = useState<{ clientName: string, serviceId: string, priceOverride: string, isPaid: boolean }>({ clientName: '', serviceId: '', priceOverride: '', isPaid: true });
 
   useEffect(() => {
     // Listen to completed bookings
@@ -131,11 +133,33 @@ export default function BillingView() {
   const filtered = getFilteredBookings();
 
   let revenue = 0;
+  let fiado = 0;
   let cuts = filtered.length;
   const serviceCounts: Record<string, number> = {};
+  const barberBreakdown: Record<string, { revenue: number, fiado: number, cuts: number }> = {};
 
   filtered.forEach(b => {
-    revenue += getBookingPrice(b);
+    const bookingRevenue = getBookingPrice(b);
+    const isPaid = b.isPaid !== false;
+    
+    if (isPaid) {
+      revenue += bookingRevenue;
+    } else {
+      fiado += bookingRevenue;
+    }
+    
+    const bId = b.barberId || 'unknown';
+    if (!barberBreakdown[bId]) {
+      barberBreakdown[bId] = { revenue: 0, fiado: 0, cuts: 0 };
+    }
+    
+    if (isPaid) {
+      barberBreakdown[bId].revenue += bookingRevenue;
+    } else {
+      barberBreakdown[bId].fiado += bookingRevenue;
+    }
+    barberBreakdown[bId].cuts += 1;
+
     if (b.serviceId) {
       const names = b.serviceId.split(',').map(s => s.trim());
       names.forEach(n => {
@@ -281,7 +305,8 @@ export default function BillingView() {
       const updates = {
         clientName: editData.clientName,
         serviceId: editData.serviceId,
-        price: isNaN(priceVal) ? null : priceVal
+        price: isNaN(priceVal) ? null : priceVal,
+        isPaid: editData.isPaid
       };
       await updateDoc(doc(db, 'bookings', selectedClient.id), updates);
       
@@ -333,11 +358,36 @@ export default function BillingView() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard title="Faturamento Total" value={`R$ ${revenue.toFixed(2)}`} icon={<DollarSign className="text-green-500" />} />
-        <StatCard title="Cortes Realizados" value={cuts} icon={<Scissors className="text-gold" />} />
-        <StatCard title="Serviço Mais Pedido" value={topService} icon={<TrendingUp className="text-blue-500" />} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+        <StatCard title="Faturamento" value={`R$ ${revenue.toFixed(2)}`} icon={<DollarSign className="text-green-500" />} />
+        <StatCard title="Fiado (A Receber)" value={`R$ ${fiado.toFixed(2)}`} icon={<Clock className="text-red-500" />} />
+        <StatCard title="Cortes" value={cuts} icon={<Scissors className="text-gold" />} />
+        <StatCard title="Mais Pedido" value={topService} icon={<TrendingUp className="text-blue-500" />} />
       </div>
+
+      {Object.keys(barberBreakdown).length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {Object.entries(barberBreakdown).map(([bId, data]) => {
+             const b = barbers.find(x => x.id === bId);
+             const name = b ? b.name : (bId === 'any' ? 'Sem Preferência' : 'Outro');
+             return (
+               <div key={bId} className="glass-card p-6 flex flex-col justify-between h-full">
+                 <div className="flex justify-between items-start mb-4">
+                   <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold max-w-[70%]">Faturamento: {name}</p>
+                   <div className="p-3 bg-white/5 rounded-xl">
+                     <Users className="text-purple-400 w-5 h-5" />
+                   </div>
+                 </div>
+                 <div>
+                   <p className="text-2xl font-display font-bold text-green-400 truncate">R$ {data.revenue.toFixed(2)}</p>
+                   {data.fiado > 0 && <p className="text-sm font-bold text-red-500 mt-1">Fiado: R$ {data.fiado.toFixed(2)}</p>}
+                   <p className="text-xs text-white/50 mt-1">{data.cuts} atendimentos</p>
+                 </div>
+               </div>
+             )
+          })}
+        </div>
+      )}
 
       <div className="glass-card p-6 min-h-[400px]">
         <div className="flex items-center justify-between mb-8">
@@ -407,9 +457,27 @@ export default function BillingView() {
                         </div>
                         <p className="text-sm text-white/50">{b.serviceId}</p>
                       </div>
-                      <div className="text-left sm:text-right mt-2 sm:mt-0">
-                        <p className="font-bold text-gold">R$ {getBookingPrice(b).toFixed(2)}</p>
-                        <p className="text-xs text-white/30">{d.toLocaleString()}</p>
+                      <div className="text-left sm:text-right mt-2 sm:mt-0 flex flex-col items-start sm:items-end gap-2">
+                        <div>
+                          <p className="font-bold text-gold">R$ {getBookingPrice(b).toFixed(2)}</p>
+                          <p className="text-xs text-white/30">{d.toLocaleString()}</p>
+                        </div>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await updateDoc(doc(db, 'bookings', b.id), {
+                                isPaid: b.isPaid === false ? true : false
+                              });
+                              toast.success(b.isPaid === false ? 'Marcado como pago' : 'Marcado como fiado');
+                            } catch (err) {
+                              toast.error('Erro ao atualizar');
+                            }
+                          }}
+                          className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded ${b.isPaid !== false ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'}`}
+                        >
+                          {b.isPaid !== false ? 'Pago' : 'Fiado'}
+                        </button>
                       </div>
                     </div>
                   );
@@ -546,7 +614,18 @@ export default function BillingView() {
                     onChange={(e) => setEditData({ ...editData, priceOverride: e.target.value })}
                     className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors font-bold text-gold"
                   />
-                  <p className="text-[10px] text-white/40">O valor é calculado automaticamente ao selecionar serviços/produtos, mas pode ser alterado manualmente.</p>
+                  <p className="text-[10px] text-white/40 mb-4">O valor é calculado automaticamente ao selecionar serviços/produtos, mas pode ser alterado manualmente.</p>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button 
+                    type="button"
+                    onClick={() => setEditData({ ...editData, isPaid: !editData.isPaid })}
+                    className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${editData.isPaid ? 'bg-gold text-carbon' : 'bg-white/10 border border-white/20'}`}
+                  >
+                    {editData.isPaid && <Check className="w-4 h-4" />}
+                  </button>
+                  <span className="text-sm font-bold text-white/80">Marcar como Pago</span>
                 </div>
 
                 <div className="flex justify-end gap-3 pt-4">
@@ -583,8 +662,15 @@ export default function BillingView() {
                 </div>
                 
                 <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                  <span className="text-white/50">Valor Pago</span>
-                  <span className="font-bold text-gold text-lg">R$ {getBookingPrice(selectedClient).toFixed(2)}</span>
+                  <span className="text-white/50">Valor Total</span>
+                  <div className="flex items-center gap-3">
+                    {selectedClient.isPaid === false ? (
+                      <span className="bg-red-500/20 text-red-500 text-xs px-2 py-1 rounded font-bold uppercase tracking-widest">Fiado</span>
+                    ) : (
+                      <span className="bg-green-500/20 text-green-500 text-xs px-2 py-1 rounded font-bold uppercase tracking-widest">Pago</span>
+                    )}
+                    <span className="font-bold text-gold text-lg">R$ {getBookingPrice(selectedClient).toFixed(2)}</span>
+                  </div>
                 </div>
                 
                 <div className="flex justify-between items-center border-b border-white/10 pb-4">

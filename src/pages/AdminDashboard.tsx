@@ -61,6 +61,8 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings' | 'log'>('queue');
   const [callingBooking, setCallingBooking] = useState<any>(null);
   const [cancelingBooking, setCancelingBooking] = useState<any>(null);
+  const [completingBooking, setCompletingBooking] = useState<any>(null);
+  const [completionBarberId, setCompletionBarberId] = useState<string>('');
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
@@ -198,9 +200,20 @@ export default function AdminDashboard() {
     }
   };
 
-  const completeService = async (bookingId: string) => {
+  const openCompleteModal = (booking: any) => {
+    setCompletingBooking(booking);
+    setCompletionBarberId(booking.barberId && booking.barberId !== 'any' ? booking.barberId : '');
+  };
+
+  const confirmCompleteService = async () => {
+    if (!completingBooking) return;
+    if (!completionBarberId || completionBarberId === 'any') {
+      toast.error('Por favor, selecione o barbeiro que realizou o serviço.');
+      return;
+    }
+    
     try {
-      const activeInfo = activeBookings.find(b => b.id === bookingId);
+      const activeInfo = completingBooking;
       
       // Calculate final actual price to snapshot it
       let finalPrice = 0;
@@ -218,11 +231,13 @@ export default function AdminDashboard() {
         });
       }
 
-      const bookingRef = doc(db, 'bookings', bookingId);
+      const bookingRef = doc(db, 'bookings', completingBooking.id);
       await updateDoc(bookingRef, {
         status: BookingStatus.COMPLETED,
         estimatedEndTime: serverTimestamp(),
-        price: finalPrice > 0 ? finalPrice : null // Save price snapshot
+        price: finalPrice > 0 ? finalPrice : null, // Save price snapshot
+        barberId: completionBarberId, // Assign actual barber
+        isPaid: true
       });
       
       if (activeInfo && activeInfo.pushSubscription) {
@@ -236,6 +251,8 @@ export default function AdminDashboard() {
       }
 
       toast.success('Serviço concluído!');
+      setCompletingBooking(null);
+      setCompletionBarberId('');
     } catch (err) {
       toast.error('Erro ao concluir');
     }
@@ -949,6 +966,44 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+      {completingBooking && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111] border border-white/10 p-6 rounded-2xl w-full max-w-md relative">
+            <button onClick={() => { setCompletingBooking(null); setCompletionBarberId(''); }} className="absolute top-4 right-4 text-white/40 hover:text-white p-2">
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-xl font-display font-bold mb-2 text-green-500">Concluir Serviço</h3>
+            <p className="text-sm text-white/60 mb-6">Quem realizou o serviço de <strong className="text-white">{completingBooking.clientName}</strong>?</p>
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-2 gap-2 max-h-[40vh] overflow-y-auto pr-2">
+                {barbers.filter(b => b.isActive).map(b => (
+                  <button
+                    key={b.id}
+                    onClick={() => setCompletionBarberId(b.id)}
+                    className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${completionBarberId === b.id ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
+                  >
+                    {b.imageUrl ? (
+                      <img src={b.imageUrl} alt={b.name} className="w-10 h-10 rounded-full object-cover" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-sm font-bold">
+                        {b.name.substring(0,2).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="text-sm font-bold text-center">{b.name}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={withProcessing(confirmCompleteService)}
+                className="w-full bg-green-500 text-[#111] p-4 rounded-xl hover:bg-green-400 transition-colors font-bold flex items-center justify-center gap-2 mt-2"
+              >
+                <CheckCircle className="w-5 h-5" />
+                Confirmar Conclusão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editingServicesBooking && (
               <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex p-4 pb-20 overflow-y-auto">
@@ -1179,7 +1234,7 @@ export default function AdminDashboard() {
                               </button>
                             ) : (
                               <button 
-                                onClick={withProcessing(() => completeService(activeB.id))}
+                                onClick={() => openCompleteModal(activeB)}
                                 className="w-full bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 py-3 rounded-xl flex items-center justify-center gap-2 font-bold text-sm transition-all"
                               >
                                 <CheckCircle className="w-4 h-4" />
