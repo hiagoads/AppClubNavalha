@@ -47994,4 +47994,4 @@ var init_node_entry = __esm({
             inObject = true;
           }
           previousEnd = closingElement.start;
-          if (hasMultipl
+          if (hasMultipleChi

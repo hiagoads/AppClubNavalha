@@ -1319,9 +1319,6 @@ export default function AdminDashboard() {
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
                             <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
                               <span className="truncate">{item.serviceId}</span>
-                              <span className="text-green-400 font-bold text-xs bg-green-400/10 px-1.5 py-0.5 rounded ml-2">
-                                R$ {Number(item.expectedPrice || 0).toFixed(2)}
-                              </span>
                               <button onClick={() => setEditingServicesBooking({id: item.id, serviceId: item.serviceId, expectedPrice: item.expectedPrice})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">
                                 <Edit2 className="w-3 h-3" />
                               </button>
