@@ -237,7 +237,8 @@ export default function AdminDashboard() {
         estimatedEndTime: serverTimestamp(),
         price: finalPrice > 0 ? finalPrice : null, // Save price snapshot
         barberId: completionBarberId, // Assign actual barber
-        isPaid: true
+        isPaid: true,
+        paidAt: serverTimestamp()
       });
       
       if (activeInfo && activeInfo.pushSubscription) {

@@ -20,7 +20,6 @@ import { formatTime, parsePrice, parseServiceString, stringifyServices } from '.
 
 type PeriodType = 'day' | 'week' | 'month' | 'period';
 
-
 const getServiceTime = (b: any) => {
   let time = 0;
   if (b.estimatedEndTime) {
@@ -101,22 +100,21 @@ export default function BillingView() {
      return total;
   };
 
-  
-  const getPeriodBounds = () => {
-    let start = new Date();
-    let end = new Date();
+  const getFilteredBookings = () => {
     const now = new Date();
+    
+    let start = new Date(now);
+    let end = new Date(now);
+
     if (period === 'day') {
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
+      start.setHours(0,0,0,0);
+      end.setHours(23,59,59,999);
     } else if (period === 'week') {
       const day = now.getDay();
-      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-      start = new Date(now.setDate(diff));
-      start.setHours(0, 0, 0, 0);
-      end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      start.setDate(diff);
+      start.setHours(0,0,0,0);
+      end.setHours(23,59,59,999);
     } else if (period === 'month') {
       start = new Date(now.getFullYear(), now.getMonth(), 1);
       end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
@@ -130,18 +128,13 @@ export default function BillingView() {
          end = new Date(Number(y), Number(m) - 1, Number(d), 23, 59, 59, 999);
       }
     }
-    return { start, end };
-  };
 
-  const getFilteredBookings = () => {
-    const { start, end } = getPeriodBounds();
     return bookings.filter(b => {
-      const time = getServiceTime(b);
+      const time = getBookingTime(b);
       return time >= start.getTime() && time <= end.getTime();
-    }).sort((a,b) => getServiceTime(b) - getServiceTime(a));
+    }).sort((a,b) => getBookingTime(b) - getBookingTime(a));
   };
 
-  const { start, end } = getPeriodBounds();
   const filtered = getFilteredBookings();
 
   let revenue = 0;
@@ -150,25 +143,14 @@ export default function BillingView() {
   const serviceCounts: Record<string, number> = {};
   const barberBreakdown: Record<string, { revenue: number, fiado: number, cuts: number }> = {};
   let totalDurationMins = 0;
-  let totalServiceValue = 0;
 
-  // Global revenue: calculated based on payment date
-  bookings.forEach(b => {
-    if (b.isPaid !== false) {
-      const pt = getPaymentTime(b);
-      if (pt >= start.getTime() && pt <= end.getTime()) {
-        revenue += getBookingPrice(b);
-      }
-    }
-  });
-
-  // Services done in this period (fiado, cuts, serviceCounts)
   filtered.forEach(b => {
     const bookingRevenue = getBookingPrice(b);
-    totalServiceValue += bookingRevenue;
     const isPaid = b.isPaid !== false;
     
-    if (!isPaid) {
+    if (isPaid) {
+      revenue += bookingRevenue;
+    } else {
       fiado += bookingRevenue;
     }
     
@@ -178,7 +160,9 @@ export default function BillingView() {
         barberBreakdown[bId] = { revenue: 0, fiado: 0, cuts: 0 };
       }
       
-      if (!isPaid) {
+      if (isPaid) {
+        barberBreakdown[bId].revenue += bookingRevenue;
+      } else {
         barberBreakdown[bId].fiado += bookingRevenue;
       }
       barberBreakdown[bId].cuts += 1;
@@ -188,24 +172,15 @@ export default function BillingView() {
       const names = b.serviceId.split(',').map(s => s.trim());
       names.forEach(n => {
         serviceCounts[n] = (serviceCounts[n] || 0) + 1;
-        const sDef = services.find(s => s.name.toLowerCase() === n.toLowerCase());
-        if (sDef) totalDurationMins += sDef.duration;
       });
-    }
-  });
-  
-  // Barber revenue: calculated based on payment date
-  bookings.forEach(b => {
-    if (b.isPaid !== false) {
-      const pt = getPaymentTime(b);
-      if (pt >= start.getTime() && pt <= end.getTime()) {
-        const bId = b.barberId || 'unknown';
-        if (bId !== 'any' && bId !== 'unknown') {
-          if (!barberBreakdown[bId]) {
-             barberBreakdown[bId] = { revenue: 0, fiado: 0, cuts: 0 };
-          }
-          barberBreakdown[bId].revenue += getBookingPrice(b);
-        }
+      if (isPaid) {
+        const parsed = parseServiceString(b.serviceId);
+        parsed.forEach(ps => {
+           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
+           if (s && s.duration) {
+               totalDurationMins += s.duration * ps.quantity;
+           }
+        });
       }
     }
   });
@@ -213,9 +188,8 @@ export default function BillingView() {
   // Calculate advanced metrics
   const now = new Date();
   const currentMonthBookings = bookings.filter(b => {
-     const time = getPaymentTime(b);
-     if (time === 0) return false;
-     const d = new Date(time);
+     const time = getBookingTime(b);
+     const d = time > 0 ? new Date(time) : new Date();
      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
 
@@ -245,7 +219,7 @@ export default function BillingView() {
   const contributionMargin = revenue > 0 ? ((revenue - estimatedCogs) / revenue) * 100 : 0;
   
   const totalBillableHours = totalDurationMins / 60;
-  const revenuePerHour = totalBillableHours > 0 ? (totalServiceValue / totalBillableHours) : 0;
+  const revenuePerHour = totalBillableHours > 0 ? (revenue / totalBillableHours) : 0;
 
 
   const topService = Object.keys(serviceCounts).sort((a,b) => serviceCounts[b] - serviceCounts[a])[0] || 'N/A';
@@ -313,14 +287,12 @@ export default function BillingView() {
     });
 
     bookings.forEach(b => {
-      if (b.isPaid !== false) {
-        const time = getPaymentTime(b);
-        if (time > 0) {
-          const d = new Date(time);
-          const dateStr = toDateStr(d);
-          if (map[dateStr] !== undefined) {
-             map[dateStr] += getBookingPrice(b);
-          }
+      const time = getBookingTime(b);
+      if (time > 0) {
+        const d = new Date(time);
+        const dateStr = toDateStr(d);
+        if (map[dateStr] !== undefined) {
+           map[dateStr] += getBookingPrice(b);
         }
       }
     });
@@ -505,7 +477,7 @@ export default function BillingView() {
 
       <div className="mt-8">
          <h3 className="text-xl font-display font-bold mb-4">Eficiência e Margem Operacional</h3>
-         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
            <div className="glass-card p-5 border-l-4 border-l-red-500">
               <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold mb-1">COGS (Custo de Serviços)</p>
               <p className="text-2xl font-bold text-white">R$ {estimatedCogs.toFixed(2)}</p>
@@ -519,12 +491,7 @@ export default function BillingView() {
            <div className="glass-card p-5 border-l-4 border-l-cyan-500">
               <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold mb-1">Faturamento por Hora Faturável</p>
               <p className="text-2xl font-bold text-white">R$ {revenuePerHour.toFixed(2)} / h</p>
-              <p className="text-xs text-white/40 mt-1">Baseado no valor total dos serviços</p>
-           </div>
-           <div className="glass-card p-5 border-l-4 border-l-indigo-500">
-              <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold mb-1">Horas Trabalhadas</p>
-              <p className="text-2xl font-bold text-white">{totalBillableHours.toFixed(1)} h</p>
-              <p className="text-xs text-white/40 mt-1">Horas faturáveis no período</p>
+              <p className="text-xs text-white/40 mt-1">{totalBillableHours.toFixed(1)} horas produtivas no período</p>
            </div>
          </div>
       </div>
@@ -598,7 +565,7 @@ export default function BillingView() {
                <p className="text-white/40 text-sm">Nenhum cliente atendido neste período.</p>
              ) : (
                 filtered.map(b => {
-                  const time = getServiceTime(b);
+                  const time = getBookingTime(b);
                   
                   const d = time > 0 ? new Date(time) : new Date();
                   const bId = b.barberId || 'any';
