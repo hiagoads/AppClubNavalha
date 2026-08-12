@@ -75,7 +75,7 @@ export default function ClientPanel() {
     if (formData.serviceIds.length) {
       formData.serviceIds.forEach(sName => {
         const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
-        reqDuration += s?.duration || 30;
+        reqDuration += (s && s.duration !== undefined) ? s.duration : 30;
       });
     } else {
       reqDuration = 30;

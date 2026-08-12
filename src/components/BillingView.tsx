@@ -189,7 +189,7 @@ export default function BillingView() {
       names.forEach(n => {
         serviceCounts[n] = (serviceCounts[n] || 0) + 1;
         const sDef = services.find(s => s.name.toLowerCase() === n.toLowerCase());
-        if (sDef) totalDurationMins += sDef.duration;
+        if (sDef) totalDurationMins += (sDef.duration !== undefined ? sDef.duration : 30);
       });
     }
   });

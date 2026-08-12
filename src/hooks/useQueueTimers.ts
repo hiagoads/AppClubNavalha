@@ -25,7 +25,7 @@ export function useQueueTimers(
     parsedServices.forEach(ps => {
       const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.toLowerCase() || ps.name.toLowerCase().includes(srv.name.toLowerCase()));
       if (s) {
-        d += (s.duration || 30) * ps.quantity;
+        d += (s.duration !== undefined ? s.duration : 30) * ps.quantity;
         foundAny = true;
       }
     });
