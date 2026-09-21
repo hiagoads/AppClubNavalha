@@ -25,7 +25,7 @@ export function useSettings() {
         setScheduleHours({});
       }
       setLoading(false);
-    });
+    }, (err) => { if(err.code !== "permission-denied") console.error(err); setLoading(false); });
 
     return () => unsub();
   }, []);
@@ -34,7 +34,7 @@ export function useSettings() {
     try {
       await setDoc(doc(db, 'settings', 'general'), { isOpen: !currentStatus }, { merge: true });
     } catch (err) {
-      console.error("Error toggling shop status", err);
+      if (err.code !== "permission-denied") console.error("Error toggling shop status", err);
     }
   };
 
@@ -42,7 +42,7 @@ export function useSettings() {
     try {
       await setDoc(doc(db, 'settings', 'general'), updates, { merge: true });
     } catch (err) {
-      console.error("Error updating settings", err);
+      if (err.code !== "permission-denied") console.error("Error updating settings", err);
       throw err;
     }
   };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { auth } from '../lib/firebase';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { motion } from 'framer-motion';
 import { Scissors, Lock, Mail, X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -20,6 +20,20 @@ export default function AdminLogin() {
     }
   }, [user, isAdmin, navigate]);
 
+  const handleResetPassword = async () => {
+    if (!email) {
+      toast.error('Digite seu e-mail no campo acima para redefinir a senha.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      toast.success('E-mail de redefinição enviado! Verifique sua caixa de entrada.');
+    } catch (err: any) {
+      if (err.code !== 'permission-denied') console.error(err);
+      toast.error('Erro ao enviar e-mail. Verifique se o endereço está correto.');
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -27,8 +41,9 @@ export default function AdminLogin() {
       await signInWithEmailAndPassword(auth, email, password);
       toast.success('Bem-vindo, Barbeiro!');
       navigate('/admin');
-    } catch (err) {
-      toast.error('Acesso negado. Verifique suas credenciais.');
+    } catch (err: any) {
+      if (err.code !== 'auth/invalid-credential') console.error(err);
+      toast.error('Acesso negado. E-mail ou senha incorretos.');
     } finally {
       setLoading(false);
     }
@@ -48,17 +63,9 @@ export default function AdminLogin() {
         animate={{ opacity: 1, scale: 1 }}
         className="glass-card w-full max-w-md p-6 sm:p-10 bg-carbon-light"
       >
-        <div className="text-center mb-8 sm:mb-12">
-          <h2 className="text-lg sm:text-xl font-sans font-bold tracking-widest copper-text uppercase mb-1">
-            Club
-          </h2>
-          <h1 className="text-3xl sm:text-4xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none mb-2">
-            Navalha
-          </h1>
-          <p className="text-gold font-sans text-[10px] sm:text-xs font-bold uppercase tracking-[0.2em] mb-4 mt-2">
-            • Barbearia •
-          </p>
-          <p className="text-white/40 text-xs sm:text-sm mt-4 uppercase tracking-widest border-t border-white/10 pt-4">Acesso Administrativo</p>
+        <div className="text-center mb-8 sm:mb-12 flex flex-col items-center">
+          <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-40 h-40 object-contain drop-shadow-2xl mb-4" />
+          <p className="text-white/40 text-xs sm:text-sm mt-4 uppercase tracking-widest border-t border-white/10 pt-4 w-full">Acesso Administrativo</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-6">
@@ -78,7 +85,16 @@ export default function AdminLogin() {
           </div>
 
           <div>
-            <label className="block text-xs uppercase tracking-widest text-white/50 mb-2">Senha</label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-xs uppercase tracking-widest text-white/50">Senha</label>
+              <button 
+                type="button" 
+                onClick={handleResetPassword}
+                className="text-[10px] uppercase tracking-widest text-gold hover:text-gold-light transition-colors"
+              >
+                Esqueceu a senha?
+              </button>
+            </div>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
               <input 

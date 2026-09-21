@@ -5,7 +5,7 @@ import { useServices } from '../hooks/useServices';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { db, auth } from '../lib/firebase';
-import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField, query, where, getDocs, increment } from 'firebase/firestore';
 import { BookingStatus, Booking } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
@@ -14,7 +14,9 @@ import { BarbersManager } from '../components/BarbersManager';
 import ServicesManager from '../components/ServicesManager';
 import { GlobalSettings } from '../components/GlobalSettings';
 import QueueLogView from '../components/QueueLogView';
-import { formatTime, parsePrice, parseServiceString, stringifyServices } from '../utils';
+import { formatTime, parsePrice, parseServiceString, stringifyServices, parsePhone } from '../utils';
+import { checkAndSyncClientRankBonuses } from '../utils/bonusSystem';
+import { getClientTier, DEFAULT_THRESHOLDS } from '../utils/tierSystem';
 import { 
   Play, 
   Pause,
@@ -39,6 +41,16 @@ import toast from 'react-hot-toast';
 
 import { useHistory } from '../hooks/useHistory';
 import { HistoryView } from '../components/HistoryView';
+import { GamificationManager } from '../components/GamificationManager';
+import { VipRoomManager } from '../components/VipRoomManager';
+import { VipQueueQuickBar } from '../components/vip/VipQueueQuickBar';
+import { AdminSidebar } from '../components/AdminSidebar';
+import { AddClientModal } from '../components/modals/AddClientModal';
+import { AddBreakModal } from '../components/modals/AddBreakModal';
+import { CallingBookingModal } from '../components/modals/CallingBookingModal';
+import { CancelingBookingModal } from '../components/modals/CancelingBookingModal';
+import { CompletingBookingModal } from '../components/modals/CompletingBookingModal';
+import { EditServicesModal } from '../components/modals/EditServicesModal';
 
 import { useBarbers } from '../hooks/useBarbers';
 import { useProcessing } from '../hooks/useProcessing';
@@ -58,7 +70,7 @@ export default function AdminDashboard() {
   const getServicePrice = (s: any) => {
     return parsePrice(s.promoPrice) > 0 ? parsePrice(s.promoPrice) : parsePrice(s.price);
   };
-  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings' | 'log'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'billing' | 'services' | 'barbers' | 'history' | 'settings' | 'log' | 'gamification' | 'vip_room'>('queue');
   const [callingBooking, setCallingBooking] = useState<any>(null);
   const [cancelingBooking, setCancelingBooking] = useState<any>(null);
   const [completingBooking, setCompletingBooking] = useState<any>(null);
@@ -132,7 +144,7 @@ export default function AdminDashboard() {
     try {
       await addDoc(collection(db, 'bookings'), {
         clientName: newClientData.name,
-        clientWhatsapp: newClientData.whatsapp,
+        clientWhatsapp: parsePhone(newClientData.whatsapp),
         serviceId: newClientData.serviceId,
         barberId: finalBarberId,
         type: newClientData.type,
@@ -172,22 +184,52 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleAddBreak = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddBreak = async (breakData: any) => {
     try {
-       const [h, m] = newBreakData.timeStr.split(':').map(Number);
-       const date = new Date();
-       date.setHours(h, m, 0, 0);
+       let startTime = Date.now();
+
+       if (breakData.type === 'scheduled') {
+         const [h, m] = breakData.scheduledTime.split(':').map(Number);
+         const date = new Date();
+         date.setHours(h, m, 0, 0);
+         startTime = date.getTime();
+       } else if (breakData.type === 'after_current') {
+         const target = (breakData.barberId && breakData.barberId !== 'any')
+           ? activeBookings.find(ab => ab.barberId === breakData.barberId)
+           : activeBookings[0];
+         const remMins = target ? (activeRemainingMinutes[target.id] || 0) : 0;
+         startTime = Date.now() + (remMins * 60000);
+       } else {
+         startTime = Date.now();
+       }
 
        await addDoc(collection(db, 'breaks'), {
-         startTime: date.getTime(),
-         duration: Number(newBreakData.durationStr),
-         barberId: 'any'
+         startTime,
+         duration: Number(breakData.duration),
+         barberId: breakData.barberId || 'any',
+         type: breakData.type,
+         reason: breakData.reason || 'Pausa',
+         targetBookingId: breakData.type === 'after_current' ? (activeBookings[0]?.id || '') : '',
+         createdAt: Date.now()
        });
-       toast.success('Pausa agendada!');
+
+       toast.success('Pausa configurada com sucesso!');
        setIsAddingBreak(false);
     } catch (err) {
+       console.error("Erro ao agendar pausa:", err);
        toast.error('Erro ao agendar pausa');
+    }
+  };
+
+  const startBreakNow = async (breakId: string) => {
+    try {
+      await updateDoc(doc(db, 'breaks', breakId), {
+        startTime: Date.now(),
+        type: 'now'
+      });
+      toast.success('Pausa iniciada agora!');
+    } catch (err) {
+      toast.error('Erro ao iniciar pausa');
     }
   };
 
@@ -240,6 +282,60 @@ export default function AdminDashboard() {
         isPaid: true,
         paidAt: serverTimestamp()
       });
+
+      // Gamification: Give points to client if registered
+      if (finalPrice > 0 && activeInfo && activeInfo.clientWhatsapp) {
+        try {
+          // Normalize whatsapp number (just numbers)
+          const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
+          const clientsRef = collection(db, 'clients');
+          const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
+          const snapshot = await getDocs(q);
+          
+          if (!snapshot.empty) {
+            // Client found! Add points
+            const pointsToGive = Math.floor(finalPrice * 100);
+            const clientDoc = snapshot.docs[0];
+            const clientData = clientDoc.data();
+            const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
+            const newLifetime = existingLifetime + pointsToGive;
+            const updatedTier = getClientTier({ ...clientData, lifetimePoints: newLifetime });
+
+            await updateDoc(doc(db, 'clients', clientDoc.id), {
+              points: increment(pointsToGive),
+              seasonalPoints: increment(pointsToGive),
+              weeklyPoints: increment(pointsToGive),
+              lifetimePoints: increment(pointsToGive),
+              level: updatedTier.level
+            });
+            
+            // Register point transaction
+            await addDoc(collection(db, 'point_transactions'), {
+              clientId: clientDoc.id,
+              clientName: clientData.username,
+              points: pointsToGive,
+              type: 'earned',
+              description: 'Corte/Serviço finalizado',
+              createdAt: new Date().toISOString()
+            });
+
+            // Automatically check and award any rank bonuses if client reached new rank score
+            const updatedClient = {
+              ...clientData,
+              points: (clientData.points || 0) + pointsToGive,
+              seasonalPoints: (clientData.seasonalPoints || 0) + pointsToGive,
+              weeklyPoints: (clientData.weeklyPoints || 0) + pointsToGive,
+              lifetimePoints: newLifetime,
+              level: updatedTier.level
+            };
+            await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient);
+            
+            toast.success(`${pointsToGive} pontos creditados para ${clientData.username}!`);
+          }
+        } catch (e) {
+          console.error("Error giving points:", e);
+        }
+      }
       
       if (activeInfo && activeInfo.pushSubscription) {
         import('../services/pushManager').then(({ sendWebPush }) => {
@@ -247,8 +343,25 @@ export default function AdminDashboard() {
             activeInfo.pushSubscription, 
             'Serviço Concluído', 
             `Seu atendimento foi concluído. Obrigado por escolher a Barbearia!`
-          ).catch(console.error);
+          ).catch(err => { if(err.code !== 'permission-denied') console.error(err); });
         });
+      }
+
+      // Check if there are any 'after_current' breaks waiting for this barber or all barbers
+      const afterBreaks = breaks.filter(b => 
+        b.type === 'after_current' && 
+        (!b.barberId || b.barberId === 'any' || b.barberId === completionBarberId || (completingBooking && b.targetBookingId === completingBooking.id))
+      );
+      for (const ab of afterBreaks) {
+        try {
+          await updateDoc(doc(db, 'breaks', ab.id), {
+            startTime: Date.now(),
+            type: 'now'
+          });
+          toast.success(`Pausa de ${ab.duration} min iniciada automaticamente!`);
+        } catch (e) {
+          console.error("Error activating pending break:", e);
+        }
       }
 
       toast.success('Serviço concluído!');
@@ -337,7 +450,7 @@ export default function AdminDashboard() {
             bookingToUndo.pushSubscription, 
             'Atendimento Cancelado', 
             `Seu atendimento foi cancelado ou você perdeu sua vez.`
-          ).catch(console.error);
+          ).catch(err => { if(err.code !== 'permission-denied') console.error(err); });
         });
       }
 
@@ -499,7 +612,7 @@ export default function AdminDashboard() {
       <div className="bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <h2 className="text-sm font-sans font-bold tracking-widest copper-text uppercase">Club</h2>
+            <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-10 h-10 object-contain drop-shadow-lg" />
             <button
               onClick={withProcessing(() => toggleOpenStatus(isOpen))}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${isOpen ? 'bg-green-500/10 border-green-500/30 text-green-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}
@@ -508,9 +621,6 @@ export default function AdminDashboard() {
               <span className="text-[10px] font-bold uppercase tracking-wider">{isOpen ? 'ABERTO' : 'FECHADO'}</span>
             </button>
           </div>
-          <h1 className="text-xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none">
-            Navalha
-          </h1>
         </div>
         <button 
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -521,41 +631,12 @@ export default function AdminDashboard() {
       </div>
 
       {/* Sidebar - Now a fixed overlay on all sizes */}
-      <aside className={`${
-        isMobileMenuOpen ? 'flex' : 'hidden'
-      } w-full md:w-64 bg-carbon-light/95 backdrop-blur-md border-r border-white/10 p-4 sm:p-6 flex-col shrink-0 overflow-y-auto fixed h-[calc(100dvh-80px)] z-30 top-[80px] pb-12`}>
-        <nav className="flex-1 space-y-2 mt-4">
-          <button onClick={() => { setActiveTab('queue'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<Users />} label="Fila" active={activeTab === 'queue'} />
-          </button>
-          <button onClick={() => { setActiveTab('log'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<History />} label="Controle de Tabela" active={activeTab === 'log'} />
-          </button>
-          <button onClick={() => { setActiveTab('billing'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<BarChart3 />} label="Faturamento" active={activeTab === 'billing'} />
-          </button>
-          <button onClick={() => { setActiveTab('history'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<History />} label="Histórico (Restaurar)" active={activeTab === 'history'} />
-          </button>
-          <button onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<Settings />} label="Configurações" active={activeTab === 'settings'} />
-          </button>
-          <button onClick={() => { setActiveTab('barbers'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<Scissors />} label="Barbeiros" active={activeTab === 'barbers'} />
-          </button>
-          <button onClick={() => { setActiveTab('services'); setIsMobileMenuOpen(false); }} className={`w-full text-left`}>
-            <NavItem icon={<Settings />} label="Serviços" active={activeTab === 'services'} />
-          </button>
-        </nav>
-
-        <button 
-          onClick={() => auth.signOut()}
-          className="mt-6 md:mt-auto flex items-center gap-3 p-3 text-white/40 hover:text-red-400 transition-colors"
-        >
-          <LogOut className="w-5 h-5" />
-          <span>Sair</span>
-        </button>
-      </aside>
+      <AdminSidebar 
+        activeTab={activeTab} 
+        setActiveTab={setActiveTab} 
+        isMobileMenuOpen={isMobileMenuOpen} 
+        setIsMobileMenuOpen={setIsMobileMenuOpen} 
+      />
 
       {/* Main Content */}
       <main className="flex-1 p-4 sm:p-6 md:p-10 overflow-y-auto">
@@ -598,585 +679,144 @@ export default function AdminDashboard() {
               </div>
             </header>
 
+            {/* Painel de Visualização Rápida da Sala VIP na Fila */}
+            <VipQueueQuickBar onGoToVipRoom={() => setActiveTab('vip_room')} />
+
             {breaks.length > 0 && (
-              <div className="mb-6 flex flex-col gap-2">
-                {breaks.map(b => (
-                  <div key={b.id} className="glass-card px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/5 border-gold/30">
-                    <div className="flex items-center gap-3 text-gold/80">
-                      <Clock className="w-5 h-5" />
-                      <div>
-                        <p className="font-bold text-sm">Pausa Agendada</p>
-                        <p className="text-xs text-white/50">{new Date(b.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • Duração de {formatTime(b.duration)}</p>
-                      </div>
-                    </div>
-                    <button onClick={withProcessing(() => removeBreak(b.id))} className="text-white/40 hover:text-red-400 text-xs uppercase font-bold tracking-wider">
-                      Cancelar
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+              <div className="mb-6 flex flex-col gap-2.5">
+                {breaks.map(b => {
+                  const now = Date.now();
+                  const startTime = b.startTime || now;
+                  const endTime = startTime + (b.duration || 0) * 60000;
+                  const isActive = b.type === 'now' || (now >= startTime && now < endTime);
+                  const isAfterCurrent = b.type === 'after_current';
+                  const isScheduled = b.type === 'scheduled' || (!isActive && !isAfterCurrent && startTime > now);
+                  const remMinutes = Math.max(1, Math.ceil((endTime - now) / 60000));
+                  const barberObj = barbers.find(barber => barber.id === b.barberId);
+                  const barberLabel = barberObj ? `Barbeiro: ${barberObj.name}` : 'Toda a Barbearia';
 
-            {isAddingBreak && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                <div className="glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-sm relative animate-in fade-in zoom-in duration-200">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold font-display silver-text-gradient">
-                      Agendar Pausa
-                    </h3>
-                    <button
-                      onClick={() => setIsAddingBreak(false)}
-                      className="text-white/40 hover:text-white transition-colors"
+                  return (
+                    <div 
+                      key={b.id} 
+                      className={`glass-card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border transition-all ${
+                        isActive 
+                          ? 'bg-gold/10 border-gold shadow-lg shadow-gold/10' 
+                          : 'bg-white/5 border-white/10'
+                      }`}
                     >
-                      <XCircle className="w-6 h-6" />
-                    </button>
-                  </div>
-
-                  <form onSubmit={withProcessing(handleAddBreak)} className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Horário de Início</label>
-                      <input
-                        type="time"
-                        value={newBreakData.timeStr}
-                        onChange={(e) => setNewBreakData({ ...newBreakData, timeStr: e.target.value })}
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Duração (Minutos)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={newBreakData.durationStr}
-                        onChange={(e) => setNewBreakData({ ...newBreakData, durationStr: e.target.value })}
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                        required
-                        placeholder="Ex: 60"
-                      />
-                    </div>
-
-                    <div className="pt-4 flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setIsAddingBreak(false)}
-                        className="px-4 py-2 text-white/60 hover:text-white font-bold transition-colors"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="bg-gold text-carbon px-6 py-2 rounded-xl font-bold hover:bg-gold-dark transition-colors"
-                      >
-                        Confirmar
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {isAddingClient && (
-              <div className="fixed inset-0 z-50 flex p-4 pb-20 bg-black/60 backdrop-blur-sm overflow-y-auto">
-                <div className="m-auto glass-card p-6 sm:p-8 bg-carbon-light border border-white/10 rounded-2xl w-full max-w-md relative animate-in fade-in zoom-in duration-200">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold font-display silver-text-gradient">
-                      Novo Cliente na Fila
-                    </h3>
-                    <button
-                      onClick={() => setIsAddingClient(false)}
-                      className="text-white/40 hover:text-white transition-colors"
-                    >
-                      <XCircle className="w-6 h-6" />
-                    </button>
-                  </div>
-
-                  <form onSubmit={withProcessing(handleAddClient)} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-2 mb-4 p-1 bg-black/40 rounded-xl">
-                      <button
-                        type="button"
-                        onClick={() => setNewClientData({ ...newClientData, type: 'walk-in' })}
-                        className={`py-2 rounded-lg text-sm font-bold transition-all ${newClientData.type === 'walk-in' ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
-                      >
-                        Entrar na Fila
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setNewClientData({ ...newClientData, type: 'scheduled' })}
-                        className={`py-2 rounded-lg text-sm font-bold transition-all ${newClientData.type === 'scheduled' ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
-                      >
-                        Agendar Horário
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Nome do Cliente</label>
-                      <input
-                        type="text"
-                        value={newClientData.name}
-                        onChange={(e) => setNewClientData({ ...newClientData, name: e.target.value })}
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                        placeholder="Ex: João"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">WhatsApp</label>
-                      <input
-                        type="tel"
-                        value={newClientData.whatsapp}
-                        onChange={(e) => setNewClientData({ ...newClientData, whatsapp: e.target.value })}
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                        placeholder="(00) 00000-0000"
-                        required
-                      />
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Barbeiro</label>
-                      <select
-                        value={newClientData.barberId}
-                        onChange={(e) => setNewClientData({ ...newClientData, barberId: e.target.value })}
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                      >
-                        <option value="any">Qualquer um</option>
-                        {barbers.filter(b => b.isActive).map(barber => (
-                          <option key={barber.id} value={barber.id}>{barber.name}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {newClientData.type === 'scheduled' && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Data</label>
-                          <input 
-                            type="date" 
-                            required
-                            value={newClientData.scheduledDate}
-                            onChange={(e) => setNewClientData({...newClientData, scheduledDate: e.target.value})}
-                            className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                            style={{ colorScheme: 'dark' }}
-                          />
+                      <div className="flex items-start sm:items-center gap-3.5">
+                        <div className={`p-2.5 rounded-xl mt-0.5 sm:mt-0 shrink-0 ${
+                          isActive 
+                            ? 'bg-gold text-carbon animate-pulse' 
+                            : 'bg-white/10 text-white/60'
+                        }`}>
+                          <Clock className="w-5 h-5" />
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Horário</label>
-                          <input 
-                            type="time" 
-                            required
-                            value={newClientData.scheduledTime}
-                            onChange={(e) => setNewClientData({...newClientData, scheduledTime: e.target.value})}
-                            className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-white focus:border-gold outline-none transition-colors"
-                            style={{ colorScheme: 'dark' }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços e Produtos</label>
-                      <div className="flex flex-col gap-2">
-                        <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
-                           {services.map(s => {
-                             const parsedNames = parseServiceString(newClientData.serviceId).map(ps => ps.name.trim().toLowerCase());
-                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
-                             return (
-                               <button
-                                 key={s.id}
-                                 type="button"
-                                 onClick={() => {
-                                   setNewClientData(prev => {
-                                     let parsed = parseServiceString(prev.serviceId);
-                                     if (isSelected) {
-                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
-                                     } else {
-                                       parsed.push({ quantity: 1, name: s.name });
-                                     }
-                                     return { ...prev, serviceId: stringifyServices(parsed) };
-                                   });
-                                 }}
-                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                               >
-                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
-                                 {s.name}
-                               </button>
-                             );
-                           })}
-                        </div>
-                        {parseServiceString(newClientData.serviceId).filter(ps => {
-                           const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                           return s?.isProduct;
-                        }).map(ps => (
-                           <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
-                             <label className="text-xs text-white/70 font-bold flex justify-between">
-                               <span>Quantidade: {ps.name}</span>
-                               <span className="text-gold">R$ {
-                                 ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.price)) * ps.quantity ).toFixed(2)
-                               }</span>
-                             </label>
-                             <div className="flex items-center gap-3">
-                               <button 
-                                 type="button" 
-                                 onClick={() => {
-                                   setNewClientData(prev => {
-                                     let parsed = parseServiceString(prev.serviceId);
-                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                                     if (existing) {
-                                       existing.quantity -= 1;
-                                       if (existing.quantity <= 0) {
-                                         parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.trim().toLowerCase());
-                                       }
-                                     }
-                                     return { ...prev, serviceId: stringifyServices(parsed) };
-                                   });
-                                 }}
-                                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
-                               >
-                                 -
-                               </button>
-                               <span className="w-8 text-center text-white font-bold">{ps.quantity}</span>
-                               <button 
-                                 type="button" 
-                                 onClick={() => {
-                                   setNewClientData(prev => {
-                                     let parsed = parseServiceString(prev.serviceId);
-                                     let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                                     if (existing) existing.quantity += 1;
-                                     return { ...prev, serviceId: stringifyServices(parsed) };
-                                   });
-                                 }}
-                                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
-                               >
-                                 +
-                               </button>
-                             </div>
-                           </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {newClientData.serviceId.length > 0 && (
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex flex-col gap-1">
-                        <div className="flex justify-between items-center">
-                          <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
-                          <span className="text-gold font-bold text-xl">
-                            R$ {parseServiceString(newClientData.serviceId).reduce((acc, ps) => {
-                              const s = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                              if (!s) return acc;
-                              return acc + (getServicePrice(s) * ps.quantity);
-                            }, newClientData.type === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
-                          </span>
-                        </div>
-                        {newClientData.type === 'scheduled' && Number(schedulingFee) > 0 && (
-                          <span className="text-white/40 text-xs text-right">
-                            Inclui taxa de agendamento (R$ {Number(schedulingFee).toFixed(2)})
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="bg-gold/10 border border-gold/20 rounded-xl p-4 mt-4 flex gap-3">
-                      <AlertTriangle className="w-5 h-5 text-gold shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-gold text-sm font-bold">Aviso Importante</p>
-                        <p className="text-white/70 text-xs mt-1 leading-relaxed">
-                          Uma taxa de agendamento está inclusa (se aplicável), e deverá ser paga junto com o serviço no local. A perda do horário implica no não reembolso de taxas.
-                        </p>
-                        {newClientData.type === 'scheduled' && Number(schedulingFee) > 0 && (
-                          <p className="text-white/70 text-xs mt-2 leading-relaxed font-semibold bg-black/20 p-2 rounded inline-block">
-                            Há uma taxa de agendamento de R$ {Number(schedulingFee).toFixed(2)} que será cobrada no momento do serviço.
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                            <span className="font-bold text-sm text-white">
+                              {b.reason || 'Pausa / Intervalo'}
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-semibold">
+                              {barberLabel}
+                            </span>
+                            {isActive && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gold text-carbon font-extrabold uppercase tracking-wider animate-pulse">
+                                Em Andamento ({remMinutes} min restantes)
+                              </span>
+                            )}
+                            {isAfterCurrent && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold uppercase tracking-wider">
+                                Após Atendimento Atual
+                              </span>
+                            )}
+                            {isScheduled && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 font-bold uppercase tracking-wider">
+                                Programada: {new Date(startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-white/50">
+                            Duração: <strong className="text-white/80">{b.duration} min</strong>
+                            {isActive && ` • Término previsto às ${new Date(endTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`}
+                            {isAfterCurrent && ` • Inicia assim que o cliente em atendimento terminar`}
                           </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-center">
+                        {!isActive && (
+                          <button
+                            onClick={withProcessing(() => startBreakNow(b.id))}
+                            className="bg-gold/20 hover:bg-gold/30 text-gold border border-gold/40 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                          >
+                            Iniciar Agora
+                          </button>
                         )}
+                        <button 
+                          onClick={withProcessing(() => removeBreak(b.id))} 
+                          className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                        >
+                          {isActive ? 'Encerrar Pausa' : 'Cancelar'}
+                        </button>
                       </div>
                     </div>
-
-                    <div className="pt-4 flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setIsAddingClient(false)}
-                        className="px-6 py-3 rounded-lg font-bold text-white/40 hover:text-white transition-colors"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors"
-                      >
-                        Adicionar
-                      </button>
-                    </div>
-                  </form>
-                </div>
+                  );
+                })}
               </div>
             )}
+            <AddBreakModal
+              isOpen={isAddingBreak}
+              onClose={() => setIsAddingBreak(false)}
+              onConfirm={withProcessing(handleAddBreak)}
+              activeBookings={activeBookings}
+              barbers={barbers}
+              isProcessing={isProcessing}
+            />
+
+
+            <AddClientModal
+              isOpen={isAddingClient}
+              onClose={() => setIsAddingClient(false)}
+              newClientData={newClientData}
+              setNewClientData={setNewClientData}
+              onSubmit={withProcessing(handleAddClient)}
+              barbers={barbers}
+              services={services}
+              schedulingFee={schedulingFee}
+            />
 
             {/* Edit Services Modal */}
             
-      {/* Modals */}
-      {callingBooking && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111] border border-white/10 p-6 rounded-2xl w-full max-w-md relative">
-            <button onClick={() => setCallingBooking(null)} className="absolute top-4 right-4 text-white/40 hover:text-white p-2">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-xl font-display font-bold mb-6">Selecionar Barbeiro</h3>
-            <p className="text-sm text-white/60 mb-6">Selecione qual barbeiro irá atender <strong className="text-white">{callingBooking.clientName}</strong>.</p>
-            <div className="grid grid-cols-2 gap-4">
-              {barbers.filter(b => b.isActive).map(barber => (
-                <button
-                  key={barber.id}
-                  onClick={() => {
-                    startService(callingBooking.id, barber.id);
-                    setCallingBooking(null);
-                  }}
-                  className="bg-white/5 border border-white/10 p-4 rounded-xl hover:bg-gold/20 hover:border-gold/50 transition-colors flex flex-col items-center gap-2"
-                >
-                  <Scissors className="w-6 h-6 text-gold" />
-                  <span className="font-bold">{barber.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <CallingBookingModal
+        booking={callingBooking}
+        onClose={() => setCallingBooking(null)}
+        barbers={barbers}
+        onSelectBarber={startService}
+      />
 
-      {cancelingBooking && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111] border border-white/10 p-6 rounded-2xl w-full max-w-md relative">
-            <button onClick={() => setCancelingBooking(null)} className="absolute top-4 right-4 text-white/40 hover:text-white p-2">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-xl font-display font-bold mb-6 text-red-500">Cancelar Ação</h3>
-            <p className="text-sm text-white/60 mb-6">O que deseja fazer com <strong className="text-white">{cancelingBooking.clientName}</strong>?</p>
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={withProcessing(() => returnToQueue(cancelingBooking.id))}
-                className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/40 p-4 rounded-xl hover:bg-yellow-500/30 transition-colors font-bold flex items-center justify-center gap-2"
-              >
-                <ArrowLeft className="w-5 h-5" />
-                Devolver para a Fila
-              </button>
-              <button
-                onClick={withProcessing(() => removeBooking(cancelingBooking.id))}
-                className="bg-red-500/20 text-red-500 border border-red-500/40 p-4 rounded-xl hover:bg-red-500/30 transition-colors font-bold flex items-center justify-center gap-2"
-              >
-                <XCircle className="w-5 h-5" />
-                Cancelar Agendamento Totalmente
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {completingBooking && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#111] border border-white/10 p-6 rounded-2xl w-full max-w-md relative">
-            <button onClick={() => { setCompletingBooking(null); setCompletionBarberId(''); }} className="absolute top-4 right-4 text-white/40 hover:text-white p-2">
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-xl font-display font-bold mb-2 text-green-500">Concluir Serviço</h3>
-            <p className="text-sm text-white/60 mb-6">Quem realizou o serviço de <strong className="text-white">{completingBooking.clientName}</strong>?</p>
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-2 max-h-[40vh] overflow-y-auto pr-2">
-                {barbers.filter(b => b.isActive).map(b => (
-                  <button
-                    key={b.id}
-                    onClick={() => setCompletionBarberId(b.id)}
-                    className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${completionBarberId === b.id ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                  >
-                    {b.imageUrl ? (
-                      <img src={b.imageUrl} alt={b.name} className="w-10 h-10 rounded-full object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-sm font-bold">
-                        {b.name.substring(0,2).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="text-sm font-bold text-center">{b.name}</span>
-                  </button>
-                ))}
-              </div>
-              <button
-                onClick={withProcessing(confirmCompleteService)}
-                className="w-full bg-green-500 text-[#111] p-4 rounded-xl hover:bg-green-400 transition-colors font-bold flex items-center justify-center gap-2 mt-2"
-              >
-                <CheckCircle className="w-5 h-5" />
-                Confirmar Conclusão
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <CancelingBookingModal
+        booking={cancelingBooking}
+        onClose={() => setCancelingBooking(null)}
+        onReturnToQueue={withProcessing(returnToQueue)}
+        onCancelBooking={withProcessing(removeBooking)}
+      />
+      <CompletingBookingModal
+        booking={completingBooking}
+        onClose={() => { setCompletingBooking(null); setCompletionBarberId(""); }}
+        barbers={barbers}
+        completionBarberId={completionBarberId}
+        setCompletionBarberId={setCompletionBarberId}
+        onConfirm={withProcessing(confirmCompleteService)}
+      />
 
-      {editingServicesBooking && (
-              <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex p-4 pb-20 overflow-y-auto">
-                <div className="m-auto bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
-                  <button 
-                    onClick={() => setEditingServicesBooking(null)}
-                    className="absolute top-4 right-4 text-white/40 hover:text-white"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
-                      <Scissors className="w-5 h-5" />
-                    </div>
-                    <h2 className="text-xl font-display font-bold">Editar Serviços e Produtos</h2>
-                  </div>
 
-                  <form onSubmit={withProcessing(handleUpdateServices)} className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços / Produtos</label>
-                      <input type="text" value={editingServicesBooking.serviceId} onChange={(e) => { const newVal = e.target.value; let newPrice = 0; parseServiceString(newVal).forEach(ps => { const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name); if (srv) { const promo = parsePrice(srv.promoPrice); const reg = parsePrice(srv.price); newPrice += ((promo > 0) ? promo : reg) * ps.quantity; } }); setEditingServicesBooking(prev => prev ? { ...prev, serviceId: newVal, expectedPrice: newPrice } : prev); }} placeholder="Ex: Corte, Barba" className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2" />
-                      
-                      <label className="text-xs uppercase tracking-widest text-white/50 font-bold mt-4 block">Valor Total (R$)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={editingServicesBooking.expectedPrice}
-                        onChange={(e) => {
-                           setEditingServicesBooking(prev => prev ? { ...prev, expectedPrice: e.target.value } : prev);
-                        }}
-                        placeholder="Valor total"
-                        className="w-full bg-carbon border border-white/10 rounded-lg p-3 text-sm text-white focus:border-gold outline-none transition-colors mb-2 font-mono"
-                      />
-
-                      <div className="flex flex-col gap-2 mt-4">
-                         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
-                           {services.map(s => {
-                             const parsedNames = parseServiceString(editingServicesBooking.serviceId).map(ps => ps.name.trim().toLowerCase());
-                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
-                             return (
-                               <button
-                                 key={s.id}
-                                 type="button"
-                                 onClick={() => {
-                                   setEditingServicesBooking(prev => {
-                                     if (!prev) return prev;
-                                     let parsed = parseServiceString(prev.serviceId);
-                                     if (isSelected) {
-                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
-                                     } else {
-                                       parsed.push({ quantity: 1, name: s.name });
-                                     }
-                                     
-                                     // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-                                     
-                                     return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
-                                   });
-                                 }}
-                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                               >
-                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
-                                 {s.name}
-                               </button>
-                             );
-                           })}
-                         </div>
-                         {parseServiceString(editingServicesBooking.serviceId).filter(ps => {
-                            const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                            return s?.isProduct;
-                         }).map(ps => (
-                            <div key={ps.name} className="flex flex-col gap-1 mt-2 p-2 bg-white/5 rounded-lg border border-white/10">
-                              <label className="text-xs text-white/70 font-bold flex justify-between">
-                                <span>Quantidade: {ps.name}</span>
-                                <span className="text-gold">R$ {
-                                  ( (parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) > 0 ? parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.promoPrice) : parsePrice(services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase())?.price)) * ps.quantity ).toFixed(2)
-                                }</span>
-                              </label>
-                              <div className="flex items-center gap-3">
-                                <button 
-                                  type="button" 
-                                  onClick={() => {
-                                    setEditingServicesBooking(prev => {
-                                      if (!prev) return prev;
-                                      let parsed = parseServiceString(prev.serviceId);
-                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                                      if (existing) {
-                                        existing.quantity -= 1;
-                                        if (existing.quantity <= 0) {
-                                          parsed = parsed.filter(p => p.name.trim().toLowerCase() !== ps.name.trim().toLowerCase());
-                                        }
-                                      }
-                                      
-                                      // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-
-                                      return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
-                                    });
-                                  }}
-                                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
-                                >
-                                  -
-                                </button>
-                                <span className="w-8 text-center text-white font-bold">{ps.quantity}</span>
-                                <button 
-                                  type="button" 
-                                  onClick={() => {
-                                    setEditingServicesBooking(prev => {
-                                      if (!prev) return prev;
-                                      let parsed = parseServiceString(prev.serviceId);
-                                      let existing = parsed.find(p => p.name.trim().toLowerCase() === ps.name.trim().toLowerCase());
-                                      if (existing) existing.quantity += 1;
-                                      
-                                      // Recalculate price
-                                     let newPrice = 0;
-                                     parsed.forEach(ps => {
-                                        const srv = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
-                                        if (srv) {
-                                            const promo = parsePrice(srv.promoPrice);
-                                            const reg = parsePrice(srv.price);
-                                            newPrice += ((promo > 0) ? promo : reg) * ps.quantity;
-                                        }
-                                     });
-
-                                      return { ...prev, serviceId: stringifyServices(parsed), expectedPrice: newPrice };
-                                    });
-                                  }}
-                                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                         ))}
-                       </div>
-                    </div>
-
-                    <div className="pt-4 flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setEditingServicesBooking(null)}
-                        className="px-6 py-3 rounded-lg font-bold text-white/40 hover:text-white transition-colors"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors flex items-center gap-2"
-                      >
-                        Salvar Alterações
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            )}
+      <EditServicesModal
+        booking={editingServicesBooking}
+        setBooking={setEditingServicesBooking}
+        services={services}
+        onSubmit={withProcessing(handleUpdateServices)}
+      />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Active Booking Column */}
@@ -1234,14 +874,15 @@ export default function AdminDashboard() {
                                 RETOMAR
                               </button>
                             ) : (
-                              <button 
-                                onClick={() => openCompleteModal(activeB)}
+                              <>
+                                <button
+                                 onClick={() => openCompleteModal(activeB)}
                                 className="w-full bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 py-3 rounded-xl flex items-center justify-center gap-2 font-bold text-sm transition-all"
                               >
                                 <CheckCircle className="w-4 h-4" />
                                 CONCLUIR
                               </button>
-                            )}
+
                             
                             <div className="flex gap-2">
                               {activeB.status === BookingStatus.IN_SERVICE && (
@@ -1253,14 +894,16 @@ export default function AdminDashboard() {
                                   Pausar
                                 </button>
                               )}
-                              <button 
-                                 onClick={() => setCancelingBooking(activeB)}
+                              <button
+                                  onClick={() => setCancelingBooking(activeB)}
                                  className="flex-1 bg-white/5 hover:bg-white/10 text-white/40 border border-white/10 py-2 rounded-xl flex items-center justify-center gap-2 text-xs transition-colors font-bold"
                               >
                                 <XCircle className="w-3 h-3" />
                                 Cancelar
                               </button>
                             </div>
+                            </>
+                          )}
                           </div>
                         </motion.div>
                       ) : (
@@ -1390,9 +1033,8 @@ export default function AdminDashboard() {
                                  PRESENÇA
                                </button>
                              )}
-
-                             <button 
-                               onClick={() => setCallingBooking(item)}
+                             <button
+                                onClick={() => setCallingBooking(item)}
                                className="flex items-center gap-1.5 sm:gap-2 whitespace-nowrap bg-gold/10 hover:bg-gold text-gold hover:text-carbon px-3 py-1.5 sm:px-4 sm:py-2.5 rounded-lg font-bold text-[10px] sm:text-sm transition-all shrink-0"
                              >
                                <Play className="w-3 h-3 sm:w-4 sm:h-4 fill-current" />
@@ -1418,11 +1060,14 @@ export default function AdminDashboard() {
           </>
         )}
 
+
         {activeTab === 'billing' && <BillingView />}
         
         {activeTab === 'log' && <QueueLogView queue={queue} sortedQueue={sortedQueue} exactStartTimes={exactStartTimes} />}
 
         {activeTab === 'history' && <HistoryView />}
+        {activeTab === 'gamification' && <GamificationManager />}
+        {activeTab === 'vip_room' && <VipRoomManager />}
 
         {activeTab === 'settings' && <GlobalSettings />}
 
@@ -1435,15 +1080,3 @@ export default function AdminDashboard() {
   );
 }
 
-function NavItem({ icon, label, active = false }: { icon: React.ReactNode, label: string, active?: boolean }) {
-  return (
-    <div className={`flex items-center gap-3 p-3 rounded-xl transition-all ${
-        active 
-          ? 'bg-gold text-carbon font-bold shadow-lg shadow-gold/20' 
-          : 'text-white/60 hover:bg-white/5 hover:text-white'
-      }`}>
-      {icon}
-      <span>{label}</span>
-    </div>
-  );
-}

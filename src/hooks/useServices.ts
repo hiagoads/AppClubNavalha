@@ -16,7 +16,7 @@ export function useServices() {
       })) as Service[];
       setServices(servicesData);
       setLoading(false);
-    });
+    }, (err) => { if(err.code !== "permission-denied") console.error(err); setLoading(false); });
 
     return () => unsubscribe();
   }, []);

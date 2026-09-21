@@ -1,34 +1,67 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { BarberBreak } from '../types';
 
 export function useBreaks() {
   const [breaks, setBreaks] = useState<BarberBreak[]>([]);
+  const [now, setNow] = useState(Date.now());
+
+  // Update clock every second for smooth countdowns and status transitions
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
-    // We only need future breaks or currently active breaks. We'll just fetch all for today and filter.
-    // For simplicity, we just fetch all and filter in memory, or use a where clause if start times are indexed.
-    // We will just fetch all breaks that have not ended yet.
-    // Since we store startTime as number
-    const q = query(
-      collection(db, 'breaks'),
-      where('startTime', '>=', Date.now() - 24 * 60 * 60 * 1000) // from up to 24h ago
-    );
+    const q = query(collection(db, 'breaks'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const now = Date.now();
+      const currentNow = Date.now();
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as BarberBreak[];
       
-      const activeOrFutureBreaks = docs.filter(b => (b.startTime + b.duration * 60000) > now);
-      setBreaks(activeOrFutureBreaks);
+      // Filter breaks that have not finished yet (within reasonable bounds, e.g. ended less than 1 hour ago)
+      const validBreaks = docs.filter(b => {
+        const endTime = (b.startTime || currentNow) + (b.duration || 0) * 60000;
+        return endTime > currentNow - 60000; // keep until 1 min after ending
+      });
+
+      // Sort: active first, then by startTime
+      validBreaks.sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+      setBreaks(validBreaks);
+    }, (err) => { 
+      if(err.code !== "permission-denied") console.error("Error loading breaks:", err); 
     });
 
     return () => unsubscribe();
   }, []);
 
-  return { breaks };
+  // Compute active breaks (currently happening)
+  const activeBreaks = breaks.filter(b => {
+    const start = b.startTime || 0;
+    const end = start + (b.duration || 0) * 60000;
+    return b.type === 'now' || (now >= start && now < end);
+  });
+
+  // Compute upcoming scheduled breaks
+  const upcomingBreaks = breaks.filter(b => {
+    const start = b.startTime || 0;
+    return b.type !== 'now' && start > now;
+  });
+
+  // Compute after-current breaks
+  const afterCurrentBreaks = breaks.filter(b => b.type === 'after_current');
+
+  return { 
+    breaks, 
+    activeBreaks, 
+    upcomingBreaks, 
+    afterCurrentBreaks,
+    now 
+  };
 }

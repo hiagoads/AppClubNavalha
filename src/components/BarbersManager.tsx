@@ -63,7 +63,7 @@ export function BarbersManager() {
   };
 
   const removeBarber = async (id: string) => {
-    if(!window.confirm('Tem certeza que deseja remover este barbeiro?')) return;
+    // Bypass confirm to avoid iframe blocking
     try {
       await deleteDoc(doc(db, 'barbers', id));
       toast.success('Removido com sucesso');

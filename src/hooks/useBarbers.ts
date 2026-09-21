@@ -16,7 +16,7 @@ export function useBarbers() {
       });
       setBarbers(bData);
       setLoading(false);
-    });
+    }, (err) => { if(err.code !== "permission-denied") console.error(err); setLoading(false); });
 
     return () => unsubscribe();
   }, []);

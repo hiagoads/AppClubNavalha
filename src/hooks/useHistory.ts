@@ -35,7 +35,7 @@ export function useHistory() {
       setHistory(docs);
       setLoadingHistory(false);
     }, (error) => {
-      console.error("History snap error:", error);
+      if (error.code !== "permission-denied") console.error("History snap error:", error);
       setLoadingHistory(false);
     });
 

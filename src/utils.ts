@@ -17,9 +17,16 @@ export function parsePrice(val: any): number {
   return 0;
 }
 
-export function parseServiceString(serviceStr: string) {
+export function parseServiceString(serviceStr: string | string[]) {
   if (!serviceStr) return [];
-  const items = serviceStr.split(',').map(s => s.trim()).filter(Boolean);
+  
+  let items: string[] = [];
+  if (Array.isArray(serviceStr)) {
+    items = serviceStr.map(s => String(s).trim()).filter(Boolean);
+  } else {
+    items = String(serviceStr).split(',').map(s => s.trim()).filter(Boolean);
+  }
+  
   return items.map(item => {
     const match = item.match(/^(\d+)x\s*(.*)$/i);
     if (match) {
@@ -56,4 +63,18 @@ export function getDistanceFromLatLonInMeters(lat1: number, lon1: number, lat2: 
 
 function deg2rad(deg: number) {
   return deg * (Math.PI / 180);
+}
+
+export function formatPhone(val: string): string {
+  if (!val) return '';
+  const numeric = val.replace(/\D/g, '');
+  if (numeric.length === 0) return '';
+  if (numeric.length <= 2) return `(${numeric}`;
+  if (numeric.length <= 7) return `(${numeric.slice(0, 2)}) ${numeric.slice(2)}`;
+  return `(${numeric.slice(0, 2)}) ${numeric.slice(2, 7)}-${numeric.slice(7, 11)}`;
+}
+
+export function parsePhone(val: string): string {
+  if (!val) return '';
+  return val.replace(/\D/g, '').slice(0, 11);
 }

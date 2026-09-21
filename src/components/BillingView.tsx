@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { useBarbers } from '../hooks/useBarbers';
@@ -56,13 +56,17 @@ export default function BillingView() {
   const [editData, setEditData] = useState<{ clientName: string, serviceId: string, priceOverride: string, isPaid: boolean, barberId: string }>({ clientName: '', serviceId: '', priceOverride: '', isPaid: true, barberId: '' });
   const [metricsViewMode, setMetricsViewMode] = useState<'compact' | 'comprehensive'>('compact');
 
+  const [listSearch, setListSearch] = useState('');
+  const [listPaymentFilter, setListPaymentFilter] = useState<'all' | 'paid' | 'credit'>('all');
+  const [listServiceFilter, setListServiceFilter] = useState('');
+
   useEffect(() => {
     // Listen to completed bookings
     const q = query(collection(db, 'bookings'), where('status', '==', BookingStatus.COMPLETED));
     const unsubscribe = onSnapshot(q, (snap) => {
        const docs = snap.docs.map(d => ({id: d.id, ...d.data()} as Booking));
        setBookings(docs);
-    });
+    }, (err) => { if(err.code !== "permission-denied") console.error(err); });
     return () => unsubscribe();
   }, []);
 
@@ -407,6 +411,30 @@ export default function BillingView() {
     }
   };
 
+  const displayBookings = filtered.filter(b => {
+    if (listSearch && !b.clientName.toLowerCase().includes(listSearch.toLowerCase())) {
+      return false;
+    }
+    if (listPaymentFilter === 'paid' && b.isPaid === false) return false;
+    if (listPaymentFilter === 'credit' && b.isPaid !== false) return false;
+    if (listServiceFilter && (!b.serviceId || !b.serviceId.toLowerCase().includes(listServiceFilter.trim().toLowerCase()))) {
+      return false;
+    }
+    return true;
+  });
+
+  let totalServiceFilteredQty = 0;
+  if (listServiceFilter) {
+     const filterTrimmed = listServiceFilter.trim().toLowerCase();
+     displayBookings.forEach(b => {
+         const parsed = parseServiceString(b.serviceId);
+         const matching = parsed.filter(p => p.name.toLowerCase().includes(filterTrimmed));
+         matching.forEach(m => {
+             totalServiceFilteredQty += m.quantity;
+         });
+     });
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/5 p-4 rounded-2xl border border-white/10">
@@ -592,12 +620,63 @@ export default function BillingView() {
         </div>
 
         <div className="mt-8">
-           <h3 className="text-xl font-display font-bold mb-4">Clientes Atendidos</h3>
+           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+             <h3 className="text-xl font-display font-bold">Clientes Atendidos</h3>
+             
+             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+               <div className="relative">
+                 <Search className="w-4 h-4 text-white/40 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                 <input
+                   type="text"
+                   placeholder="Buscar cliente..."
+                   value={listSearch}
+                   onChange={(e) => setListSearch(e.target.value)}
+                   className="pl-9 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-gold/50 w-full"
+                 />
+               </div>
+               
+               <select
+                 value={listPaymentFilter}
+                 onChange={(e) => setListPaymentFilter(e.target.value as any)}
+                 className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none w-full sm:w-auto"
+               >
+                 <option value="all" className="bg-[#121212] text-white">Status de Pagamento</option>
+                 <option value="paid" className="bg-[#121212] text-white">Pagos</option>
+                 <option value="credit" className="bg-[#121212] text-white">Fiado</option>
+               </select>
+
+               <select
+                 value={listServiceFilter}
+                 onChange={(e) => setListServiceFilter(e.target.value)}
+                 className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none w-full sm:w-auto"
+               >
+                 <option value="" className="bg-[#121212] text-white">Todos os Serviços</option>
+                 {services.map(s => (
+                   <option key={s.id} value={s.name} className="bg-[#121212] text-white">{s.name}</option>
+                 ))}
+               </select>
+             </div>
+           </div>
+
+           {(listSearch || listPaymentFilter !== 'all' || listServiceFilter) && (
+             <div className="mb-4 p-3 bg-gold/10 border border-gold/20 text-gold rounded-xl text-sm font-medium flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+               <div className="flex flex-col sm:flex-row gap-2 sm:gap-6">
+                 <span>Resultados: {displayBookings.length} {displayBookings.length === 1 ? 'atendimento encontrado' : 'atendimentos encontrados'}</span>
+                 {listServiceFilter && (
+                   <span className="opacity-80 border-l border-gold/30 pl-0 sm:pl-6">
+                     Quantidade vendida: {totalServiceFilteredQty}x {listServiceFilter}
+                   </span>
+                 )}
+               </div>
+               <span>Total nestes filtros: R$ {displayBookings.reduce((sum, b) => sum + getBookingPrice(b), 0).toFixed(2)}</span>
+             </div>
+           )}
+
            <div className="space-y-3">
-             {filtered.length === 0 ? (
-               <p className="text-white/40 text-sm">Nenhum cliente atendido neste período.</p>
+             {displayBookings.length === 0 ? (
+               <p className="text-white/40 text-sm">Nenhum cliente encontrado com os filtros atuais.</p>
              ) : (
-                filtered.map(b => {
+                displayBookings.map(b => {
                   const time = getServiceTime(b);
                   
                   const d = time > 0 ? new Date(time) : new Date();

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.cjs",
-    "build": "vite build && esbuild server.ts --platform=node --target=node20 --outfile=server.cjs --bundle --format=cjs --external:express",
+    "build": "vite build && esbuild server.ts --platform=node --target=node20 --outfile=server.cjs --bundle --format=cjs --external:express --external:vite",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

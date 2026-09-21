@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BackupManager } from './BackupManager';
 import { useSettings } from '../hooks/useSettings';
 import toast from 'react-hot-toast';
 import { Save } from 'lucide-react';
@@ -166,6 +167,7 @@ export function GlobalSettings() {
           </button>
         </form>
       </div>
+          <BackupManager />
     </div>
   );
 }

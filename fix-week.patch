@@ -1,0 +1,46 @@
+--- src/components/GamificationManager.tsx
++++ src/components/GamificationManager.tsx
+@@ -161,6 +161,42 @@
+     handleSaveRewards(rewards);
+   };
+ 
++  const handleResetWeek = async () => {
++    setIsResetting(true);
++    try {
++      const snap = await getDocs(collection(db, 'clients'));
++      const allClients: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
++      const sortedClients = [...allClients].sort((a, b) => (b.weeklyPoints || 0) - (a.weeklyPoints || 0));
++
++      // Award Weekly Top 3 Bonuses and reset weeklyPoints
++      for (let i = 0; i < sortedClients.length; i++) {
++        const c = sortedClients[i];
++        const rank = i + 1;
++        let newBonuses = c.bonuses || [];
++
++        if (rank === 1) {
++          newBonuses.push({ id: crypto.randomUUID(), title: 'Acesso Livre VIP (1º da Semana)', type: 'unlimited_vip', isRedeemed: false, createdAt: new Date().toISOString() });
++        } else if (rank === 2) {
++          newBonuses.push({ id: crypto.randomUUID(), title: '1 Hora VIP (2º da Semana)', type: 'vip_hours', totalHours: 1, usedHours: 0, createdAt: new Date().toISOString() });
++          newBonuses.push({ id: crypto.randomUUID(), title: 'Picolé Grátis (2º da Semana)', type: 'popsicle', isRedeemed: false, createdAt: new Date().toISOString() });
++        } else if (rank === 3) {
++          newBonuses.push({ id: crypto.randomUUID(), title: 'Picolé Grátis (3º da Semana)', type: 'popsicle', isRedeemed: false, createdAt: new Date().toISOString() });
++        }
++
++        await updateDoc(doc(db, 'clients', c.id), {
++           weeklyPoints: 0,
++           bonuses: newBonuses
++        });
++      }
++
++      toast.success(`Semana encerrada! Prêmios distribuídos aos campeões da semana.`);
++    } catch (e: any) {
++      console.error(e);
++      toast.error('Erro ao encerrar a semana.');
++    } finally {
++      setIsResetting(false);
++    }
++  };
++
+   const handleResetSeason = async () => {
+     setIsResetting(true);
+     try {

@@ -5,13 +5,13 @@ import { useQueueTimers } from '../hooks/useQueueTimers';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle, Check } from 'lucide-react';
+import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle, Check, Coffee, Sparkles, CalendarClock } from 'lucide-react';
 import { BookingStatus, BookingType, Service } from '../types';
-import { addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
+import { getDoc, addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import { formatTime, getDistanceFromLatLonInMeters, parsePrice, parseServiceString, stringifyServices } from '../utils';
+import { formatTime, getDistanceFromLatLonInMeters, parsePrice, parseServiceString, stringifyServices, parsePhone } from '../utils';
 
 export const getServicePrice = (s: any) => {
   if (!s) return 0;
@@ -22,9 +22,21 @@ export const getServicePrice = (s: any) => {
 
 import { useBarbers } from '../hooks/useBarbers';
 import { LoadingOverlay } from '../components/LoadingOverlay';
+import { ClientMenuModal } from '../components/modals/ClientMenuModal';
+import { JoinQueueModal } from '../components/modals/JoinQueueModal';
+import { EditClientServicesModal } from '../components/modals/EditClientServicesModal';
+import { ReceiptModal } from '../components/modals/ReceiptModal';
+import { ClientProfileModal } from '../components/modals/ClientProfileModal';
+import { getLevelTier, getClientTier } from '../utils/tierSystem';
+import { useGamificationSettings } from '../hooks/useGamificationSettings';
+import { EditClientProfileModal } from '../components/modals/EditClientProfileModal';
+import { RankingModal } from '../components/modals/RankingModal';
+
 
 export default function ClientPanel() {
+  const { clientProfile, user } = useAuth();
   const { queue, activeBookings, loading } = useQueue();
+  const { thresholds } = useGamificationSettings();
   const { barbers } = useBarbers();
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [formType, setFormType] = useState<'walk-in' | 'scheduled'>('walk-in');
@@ -43,6 +55,10 @@ export default function ClientPanel() {
     };
   };
   const [showMenu, setShowMenu] = useState(false);
+  const [showRewards, setShowRewards] = useState(false);
+  const [defaultAvatar, setDefaultAvatar] = useState('');
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showRanking, setShowRanking] = useState(false);
   const [myBookingId, setMyBookingId] = useState(localStorage.getItem('myBookingId'));
   // Receipt state
   const [receipt, setReceipt] = useState<{
@@ -56,9 +72,30 @@ export default function ClientPanel() {
 
   const navigate = useNavigate();
   const [services, setServices] = useState<Service[]>([]);
-  const { breaks } = useBreaks();
+  const { breaks, activeBreaks, upcomingBreaks, afterCurrentBreaks, now: clockNow } = useBreaks();
   const { isOpen, schedulingFee, scheduleHours } = useSettings();
   const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals, allOccupiedIntervals } = useQueueTimers(activeBookings, queue, services, breaks, barbers);
+
+  
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'settings', 'gamification'));
+        if (snap.exists()) {
+          setDefaultAvatar(snap.data().defaultAvatarUrl || '');
+        }
+      } catch (e: any) {
+        if (e.code !== 'permission-denied') console.error(e);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  useEffect(() => {
+    if (clientProfile) {
+      setFormData(prev => ({ ...prev, name: clientProfile.username, whatsapp: parsePhone(clientProfile.whatsapp || '') }));
+    }
+  }, [clientProfile]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -213,7 +250,7 @@ export default function ClientPanel() {
 
       const docRef = await addDoc(collection(db, 'bookings'), {
         clientName: formData.name,
-        clientWhatsapp: formData.whatsapp,
+        clientWhatsapp: parsePhone(formData.whatsapp),
         serviceId: formData.serviceIds.join(', '),
         expectedPrice: expectedPrice,
         barberId: finalBarberId,
@@ -269,7 +306,7 @@ export default function ClientPanel() {
       toast.success('Serviços atualizados com sucesso');
       setEditingServices(null);
     } catch (err) {
-      console.error("Update error:", err);
+      if (err.code !== "permission-denied") console.error("Update error:", err);
       toast.error('Erro ao atualizar serviços');
     }
   };
@@ -406,12 +443,25 @@ export default function ClientPanel() {
 
   return (
     <div className="min-h-[100dvh] bg-carbon overflow-x-hidden pt-6 pb-24 px-4 sm:px-6 relative">
-      <button 
-        onClick={() => setShowMenu(true)}
-        className="absolute top-6 left-6 p-2 text-white/70 hover:text-white z-50 cursor-pointer"
-      >
-        <Menu className="w-8 h-8" />
-      </button>
+      <div className="absolute top-6 left-0 right-0 px-4 sm:px-6 flex justify-between items-center z-50 pointer-events-none">
+        <button 
+          onClick={() => setShowMenu(true)}
+          className="p-2 -ml-2 text-white/70 hover:text-white cursor-pointer pointer-events-auto"
+        >
+          <Menu className="w-8 h-8" />
+        </button>
+
+        {/* Login / Sign-up Button for unauthenticated users */}
+        {(!user || !clientProfile) && (
+          <button
+            onClick={() => navigate('/clube')}
+            className="px-4 py-2 bg-gradient-to-r from-gold/20 to-gold/5 text-gold border border-gold/30 rounded-full font-bold text-xs sm:text-sm hover:bg-gold/20 transition-all flex items-center gap-1.5 shadow-lg shadow-gold/5 pointer-events-auto"
+          >
+            <LogIn className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>Fazer Login</span>
+          </button>
+        )}
+      </div>
 
       <header className="mb-6 sm:mb-10 text-center relative z-10">
         <motion.div
@@ -419,60 +469,225 @@ export default function ClientPanel() {
            animate={{ opacity: 1, scale: 1 }}
            className="flex flex-col items-center justify-center space-y-1 mt-6 sm:mt-0"
         >
-          <h2 className="text-xl sm:text-2xl font-sans font-bold tracking-widest copper-text uppercase">
-            Club
-          </h2>
-          <h1 className="text-4xl sm:text-6xl font-display font-extrabold silver-text-gradient tracking-tight uppercase leading-none">
-            Navalha
-          </h1>
-          <p className="text-gold font-sans text-[10px] sm:text-sm font-bold uppercase tracking-[0.2em] mt-1 sm:mt-2">
-            • Barbearia •
-          </p>
+          <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-32 h-32 sm:w-40 sm:h-40 object-contain drop-shadow-2xl" />
         </motion.div>
       </header>
 
       {/* Hamburger Menu Overlay */}
       <AnimatePresence>
-        {showMenu && (
-          <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowMenu(false)}
-              className="fixed inset-0 bg-black/80 z-40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              className="fixed top-0 left-0 bottom-0 w-64 bg-carbon-light border-r border-white/10 z-50 p-6 flex flex-col"
-            >
-              <div className="flex justify-between items-center mb-10">
-                <div className="flex items-center gap-2">
-                  <Scissors className="w-6 h-6 text-gold" />
-                  <span className="font-display font-bold gold-text-gradient text-xl">Menu</span>
-                </div>
-                <button onClick={() => setShowMenu(false)} className="text-white/50 hover:text-white">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="flex-1 space-y-2">
-                <button 
-                  onClick={() => navigate('/admin')}
-                  className="w-full flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 rounded-xl transition-colors text-left"
-                >
-                  <span className="font-bold text-white/90">Painel do Barbeiro</span>
-                  <LogIn className="w-5 h-5 text-gold" />
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
+        <ClientMenuModal isOpen={showMenu} onClose={() => setShowMenu(false)} onNavigateToAdmin={() => navigate('/admin')} onNavigateToAuth={() => navigate('/clube')} onOpenProfile={() => setShowRewards(true)} onOpenEditProfile={() => setShowEditProfile(true)} onOpenRanking={() => setShowRanking(true)} clientProfile={clientProfile} />
       </AnimatePresence>
 
+      <AnimatePresence>
+        <ClientProfileModal isOpen={showRewards} onClose={() => setShowRewards(false)} clientProfile={clientProfile} defaultAvatar={defaultAvatar} />
+      </AnimatePresence>
+      <AnimatePresence>
+        <EditClientProfileModal isOpen={showEditProfile} onClose={() => setShowEditProfile(false)} clientProfile={clientProfile} />
+      </AnimatePresence>
+      <AnimatePresence>
+        <RankingModal isOpen={showRanking} onClose={() => setShowRanking(false)} currentUserId={clientProfile?.id} />
+      </AnimatePresence>
+
+
       <main className="max-w-md mx-auto space-y-8">
+        {/* Player Card (Gamification) */}
+        {clientProfile && user && (() => {
+          const tier = getClientTier(clientProfile, thresholds);
+          return (
+          <div 
+            onClick={() => setShowRewards(true)}
+            className="relative p-[2px] rounded-2xl bg-gradient-to-b from-white/10 to-white/5 shadow-lg overflow-hidden cursor-pointer transition-transform hover:scale-[1.02] active:scale-95 mx-2 sm:mx-0"
+          >
+            {/* Dynamic border gradient based on tier for outer card? Just use white/10 is fine, or we can use tier.glowBg */}
+            <div className="rounded-[14px] bg-[#1a1a1a] p-4 sm:p-5 flex items-center gap-4 sm:gap-5 relative z-10 bg-noise">
+              {/* Avatar Frame */}
+              <div className="shrink-0 relative w-[72px] h-[72px] flex items-center justify-center">
+                <div className="relative w-[64px] h-[64px] rounded-full flex items-center justify-center bg-carbon overflow-hidden z-10">
+                   {clientProfile.avatarUrl || defaultAvatar ? (
+                     <img src={clientProfile.avatarUrl || defaultAvatar} alt="Avatar" className="w-full h-full object-cover" />
+                   ) : (
+                     <User className={`w-8 h-8 ${tier.colorText} opacity-80`} />
+                   )}
+                </div>
+                {tier.frameUrl && (
+                  <img 
+                    src={tier.frameUrl} 
+                    alt={tier.name} 
+                    className="absolute inset-0 w-[140%] h-[140%] max-w-none max-h-none left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none object-contain" 
+                  />
+                )}
+              </div>
+              
+              {/* Player Info */}
+              <div className="flex-1 min-w-0">
+                <p className={`text-[10px] font-bold ${tier.colorText} tracking-widest uppercase mb-0.5`}>{tier.name}</p>
+                <h3 className="text-lg sm:text-xl font-display font-bold text-white truncate mb-2 leading-tight">
+                  {clientProfile.username}
+                </h3>
+                
+                <div className="flex items-center justify-between mb-1.5 border-t border-white/10 pt-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Nível:</span>
+                    <span className={`text-sm font-bold ${tier.colorText}`}>{tier.level}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <div className={`w-3 h-1.5 ${tier.bgColor} -skew-x-12`}></div>
+                    <div className={`w-3 h-1.5 ${tier.bgColor} -skew-x-12 opacity-80`}></div>
+                    <div className="w-3 h-1.5 bg-white/10 -skew-x-12"></div>
+                  </div>
+                </div>
+                
+                {/* Progress bar */}
+                <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden mb-2 relative">
+                  <div 
+                    className={`absolute top-0 left-0 h-full ${tier.bgColor} rounded-full transition-all duration-1000 `} 
+                    style={{ width: `${tier.progressPercentage}%` }}
+                  />
+                </div>
+                
+                <div className="flex items-center mt-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Pontos:</span>
+                    <span className={`text-sm font-bold text-gold`}>{clientProfile.points.toLocaleString('pt-BR')}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )})()}
+
+        {/* Active Breaks Card (Intervalo / Pausa em tempo real) */}
+        {activeBreaks && activeBreaks.length > 0 && (
+          <section className="animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="flex items-center justify-between px-2 mb-2">
+              <h2 className="text-xs uppercase tracking-widest text-amber-400 font-bold flex items-center gap-1.5">
+                <Coffee className="w-3.5 h-3.5 animate-bounce" /> Intervalo / Pausa em Andamento
+              </h2>
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {activeBreaks.map(b => {
+                const start = b.startTime || clockNow;
+                const end = start + (b.duration || 0) * 60000;
+                const totalDurationMs = Math.max(1, (b.duration || 0) * 60000);
+                const elapsedMs = Math.max(0, clockNow - start);
+                const remainingMs = Math.max(0, end - clockNow);
+                const remainingSecs = Math.ceil(remainingMs / 1000);
+                const mins = Math.floor(remainingSecs / 60);
+                const secs = remainingSecs % 60;
+                const progressPercent = Math.min(100, Math.max(0, (elapsedMs / totalDurationMs) * 100));
+                const barberObj = barbers.find(barber => barber.id === b.barberId);
+                const barberLabel = barberObj ? `Barbeiro: ${barberObj.name}` : 'Toda a Barbearia';
+
+                return (
+                  <div 
+                    key={b.id}
+                    className="glass-card p-5 sm:p-6 border-amber-500/40 bg-gradient-to-br from-amber-500/10 via-[#1c1c1c] to-[#141414] relative overflow-hidden shadow-xl rounded-2xl"
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 shadow-inner">
+                          <Coffee className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-display text-lg sm:text-xl font-bold text-white leading-tight">
+                              {b.reason || 'Pausa / Intervalo'}
+                            </h3>
+                            <span className="text-[10px] uppercase font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                              {barberLabel}
+                            </span>
+                          </div>
+                          <p className="text-xs text-white/60 mt-0.5">
+                            Previsão de retorno às <strong className="text-amber-300 font-mono font-bold">{new Date(end).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <p className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Tempo Restante</p>
+                        <p className="text-xl sm:text-2xl font-mono font-black text-amber-400 leading-tight">
+                          {mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden relative">
+                        <div 
+                          className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-full transition-all duration-1000"
+                          style={{ width: `${progressPercent}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-white/40 font-mono">
+                        <span>Iniciado às {new Date(start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                        <span>Duração: {b.duration} min</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-white/50 mt-3 pt-3 border-t border-white/10 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>A fila e os tempos de espera foram atualizados com a pausa. Retornaremos em instantes!</span>
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Pending After Current Break Alert */}
+        {afterCurrentBreaks && afterCurrentBreaks.length > 0 && activeBreaks.length === 0 && (
+          <section className="animate-in fade-in duration-200">
+            {afterCurrentBreaks.map(b => (
+              <div key={b.id} className="glass-card p-3.5 border-amber-500/30 bg-amber-500/10 rounded-xl flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400 shrink-0">
+                  <Coffee className="w-4 h-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-white/90 font-bold">
+                    Pausa programada: {b.reason || 'Intervalo'} ({b.duration} min)
+                  </p>
+                  <p className="text-[11px] text-white/50">
+                    Iniciará logo após a conclusão do atendimento que está em andamento agora.
+                  </p>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {/* Upcoming Scheduled Breaks */}
+        {upcomingBreaks && upcomingBreaks.length > 0 && activeBreaks.length === 0 && (
+          <section className="animate-in fade-in duration-200">
+            {upcomingBreaks.map(b => {
+              const start = b.startTime || 0;
+              const barberObj = barbers.find(barber => barber.id === b.barberId);
+              const barberLabel = barberObj ? `(${barberObj.name})` : '';
+
+              return (
+                <div key={b.id} className="glass-card p-3 border-blue-500/30 bg-blue-500/5 rounded-xl flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 shrink-0">
+                    <CalendarClock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-white/90 font-bold">
+                      Intervalo programado às {new Date(start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} {barberLabel}
+                    </p>
+                    <p className="text-[11px] text-white/50">
+                      Duração de {b.duration} min • A fila já ajustou a estimativa para este horário.
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
         {/* My Status Card */}
         {myBooking && (
           <section>
@@ -700,369 +915,44 @@ export default function ClientPanel() {
       )}
 
       {/* Join Form Modal */}
+      
       <AnimatePresence>
-        {showJoinForm && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4"
-          >
-            <motion.div 
-              initial={{ y: 200 }}
-              animate={{ y: 0 }}
-              exit={{ y: 200 }}
-              className="bg-carbon-light flex-shrink-0 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 border-t sm:border border-white/10 max-h-[85vh] overflow-y-auto overflow-x-hidden"
-            >
-              <div className="flex justify-between items-start mb-5">
-                <div>
-                  <h2 className="text-2xl font-display font-bold gold-text-gradient">
-                    {formType === 'scheduled' ? 'Agendar' : 'Entrar na Fila'}
-                  </h2>
-                  <p className="text-white/40 text-sm">Preencha seus dados para entrar.</p>
-                </div>
-                <button 
-                  onClick={() => setShowJoinForm(false)} 
-                  className="text-white/40 hover:text-white p-2 -mr-2 -mt-2 transition-colors"
-                  aria-label="Fecar"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={withProcessing(handleSubmit)} className="space-y-4">
-                <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Nome Completo</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                    <input 
-                      required
-                      value={formData.name}
-                      onChange={(e) => setFormData({...formData, name: e.target.value})}
-                      type="text" 
-                      placeholder="Ex: João Silva" 
-                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 focus:outline-none focus:border-gold/50 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">WhatsApp</label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                    <input 
-                      required
-                      value={formData.whatsapp}
-                      onChange={(e) => setFormData({...formData, whatsapp: e.target.value.replace(/\D/g, '')})}
-                      type="tel" 
-                      placeholder="DDD + Número" 
-                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 focus:outline-none focus:border-gold/50 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Barbeiro</label>
-                    <select 
-                      value={formData.barberId}
-                      onChange={(e) => setFormData({...formData, barberId: e.target.value})}
-                      className="w-full bg-carbon border border-white/10 rounded-xl py-2.5 px-3 focus:outline-none focus:ring-1 focus:ring-gold/50 text-white text-sm"
-                    >
-                      <option value="any" className="bg-carbon text-white">Qualquer um</option>
-                      {barbers.filter(b => b.isActive).map(barber => (
-                        <option key={barber.id} value={barber.id} className="bg-carbon text-white">{barber.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {formType === 'scheduled' && (
-                    <div className="flex flex-col sm:flex-row gap-3 w-full overflow-hidden">
-                      <div className="w-full sm:flex-1 min-w-0">
-                        <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Data</label>
-                        <div className="relative">
-                          <input 
-                            type="date" 
-                            required
-                            value={formData.scheduledDate}
-                            onChange={(e) => setFormData({...formData, scheduledDate: e.target.value})}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-3 text-white focus:outline-none focus:border-gold/50 text-sm"
-                            style={{ colorScheme: 'dark', minWidth: '0', maxWidth: '100%' }}
-                          />
-                        </div>
-                      </div>
-                      <div className="w-full sm:flex-1 min-w-0">
-                        <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Horário</label>
-                        <div className="relative">
-                          <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                          <select 
-                            required
-                            value={formData.scheduledTime}
-                            onChange={(e) => setFormData({...formData, scheduledTime: e.target.value})}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-9 pr-4 text-white focus:outline-none focus:border-gold/50 appearance-none text-sm"
-                            style={{ colorScheme: 'dark', minWidth: '0', maxWidth: '100%' }}
-                          >
-                            <option value="" disabled>Selecione um horário</option>
-                            {availableSlots.map(slot => (
-                               <option key={slot} value={slot} className="bg-carbon text-white">
-                                  {slot}
-                               </option>
-                            ))}
-                            {availableSlots.length === 0 && (
-                               <option value="" disabled className="bg-carbon text-white text-red-400">
-                                  Nenhum horário disponível
-                               </option>
-                            )}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 mb-2 font-bold">Serviços</label>
-                    <div className="flex flex-wrap gap-2">
-                      {services.length > 0 ? services.map(s => (
-                         <button
-                           key={s.id}
-                           type="button"
-                           onClick={() => {
-                             setFormData(prev => ({
-                               ...prev,
-                               serviceIds: prev.serviceIds.includes(s.name)
-                                 ? prev.serviceIds.filter(id => id !== s.name)
-                                 : [...prev.serviceIds, s.name]
-                             }));
-                           }}
-                           className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${formData.serviceIds.includes(s.name) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                         >
-                           {s.name} - R$ {getServicePrice(s).toFixed(2)}
-                         </button>
-                      )) : (
-                        ['Corte Padrão', 'Barba', 'Corte + Barba'].map(s => (
-                           <button
-                             key={s}
-                             type="button"
-                             onClick={() => {
-                               setFormData(prev => ({
-                                 ...prev,
-                                 serviceIds: prev.serviceIds.includes(s)
-                                   ? prev.serviceIds.filter(id => id !== s)
-                                   : [...prev.serviceIds, s]
-                               }));
-                             }}
-                             className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors ${formData.serviceIds.includes(s) ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                           >
-                             {s}
-                           </button>
-                         ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {formData.serviceIds.length > 0 && (
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 mt-4 flex flex-col gap-1">
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/50 text-sm font-bold uppercase tracking-widest">Total Estimado</span>
-                      <span className="text-gold font-bold text-xl">
-                        R$ {formData.serviceIds.reduce((acc, sName) => {
-                          const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
-                          if (!s) return acc;
-                          return acc + getServicePrice(s);
-                        }, formType === 'scheduled' ? Number(schedulingFee) : 0).toFixed(2)}
-                      </span>
-                    </div>
-                    {formType === 'scheduled' && Number(schedulingFee) > 0 && (
-                      <span className="text-white/40 text-xs text-right">
-                        Inclui taxa de agendamento (R$ {Number(schedulingFee).toFixed(2)})
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                <div className="bg-gold/10 border border-gold/20 rounded-xl p-4 mt-4 flex gap-3">
-                  <AlertTriangle className="w-5 h-5 text-gold shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-gold text-sm font-bold">Aviso Importante</p>
-                    <p className="text-white/70 text-xs mt-1 leading-relaxed">
-                      Em caso de atraso e se você não estiver presente na sua vez, você perderá sua posição na fila/agendamento.
-                    </p>
-                    {formType === 'scheduled' && Number(schedulingFee) > 0 && (
-                      <p className="text-white/70 text-xs mt-2 leading-relaxed font-semibold bg-black/20 p-2 rounded inline-block">
-                        Há uma taxa de agendamento de R$ {Number(schedulingFee).toFixed(2)} que será cobrada no momento do serviço.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <button 
-                  type="submit"
-                  className="w-full gold-gradient text-carbon font-bold py-4 rounded-xl shadow-lg mt-4"
-                >
-                  {formType === 'scheduled' ? 'AGENDAR HORÁRIO' : 'ENTRAR NA FILA'}
-                </button>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
+        <JoinQueueModal
+          isOpen={showJoinForm}
+          onClose={() => setShowJoinForm(false)}
+          formType={formType}
+          setFormType={setFormType}
+          formData={formData}
+          setFormData={setFormData}
+          services={services}
+          onSubmit={withProcessing(handleSubmit)}
+          schedulingFee={schedulingFee}
+        />
       </AnimatePresence>
 
+
+      
       <AnimatePresence>
-        {editingServices && (
-          <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-             <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
-                  <button 
-                    onClick={() => setEditingServices(null)}
-                    className="absolute top-4 right-4 text-white/40 hover:text-white"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
-                      <Scissors className="w-5 h-5" />
-                    </div>
-                    <h2 className="text-xl font-display font-bold">Editar Serviços</h2>
-                  </div>
-
-                  <form onSubmit={withProcessing(handleUpdateServices)} className="space-y-4">
-                    <div className="space-y-2">
-                       <label className="text-xs uppercase tracking-widest text-white/50 font-bold">Serviços Selecionados</label>
-                       <div className="flex flex-col gap-2">
-                         <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-black/20 rounded-lg border border-white/10">
-                           {services.map(s => {
-                             const parsedNames = parseServiceString(editingServices.serviceId).map(ps => ps.name.trim().toLowerCase());
-                             const isSelected = parsedNames.includes(s.name.trim().toLowerCase());
-                             return (
-                               <button
-                                 key={s.id}
-                                 type="button"
-                                 onClick={() => {
-                                   setEditingServices(prev => {
-                                     if (!prev) return prev;
-                                     let parsed = parseServiceString(prev.serviceId);
-                                     if (isSelected) {
-                                       parsed = parsed.filter(p => p.name.trim().toLowerCase() !== s.name.trim().toLowerCase());
-                                     } else {
-                                       parsed.push({ quantity: 1, name: s.name });
-                                     }
-                                     return { ...prev, serviceId: stringifyServices(parsed) };
-                                   });
-                                 }}
-                                 className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
-                               >
-                                 {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
-                                 {s.name}
-                               </button>
-                             );
-                           })}
-                         </div>
-                       </div>
-                    </div>
-
-                    <div className="pt-4 flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setEditingServices(null)}
-                        className="px-6 py-3 rounded-lg font-bold text-white/40 hover:text-white transition-colors"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="bg-gold text-carbon px-6 py-3 rounded-lg font-bold hover:bg-gold-dark transition-colors"
-                      >
-                        Atualizar
-                      </button>
-                    </div>
-                  </form>
-             </div>
-          </div>
-        )}
+        <EditClientServicesModal
+          isOpen={!!editingServices}
+          editingServices={editingServices}
+          setEditingServices={setEditingServices}
+          services={services}
+          onSubmit={withProcessing(handleUpdateServices)}
+        />
       </AnimatePresence>
+
 
       {/* Receipt Modal */}
+      
       <AnimatePresence>
-        {receipt && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 flex flex-col justify-center items-center p-4"
-          >
-            <motion.div 
-              initial={{ y: 200, scale: 0.9 }}
-              animate={{ y: 0, scale: 1 }}
-              exit={{ y: 200, scale: 0.9 }}
-              className="bg-carbon-light rounded-2xl p-6 border border-white/10 w-full max-w-sm max-h-[90vh] overflow-y-auto overflow-x-hidden relative"
-            >
-              <button 
-                onClick={() => setReceipt(null)}
-                className="absolute top-4 right-4 text-white/40 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              
-              <div className="text-center mb-6 mt-2">
-                <div className="w-12 h-12 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <Check className="w-6 h-6" />
-                </div>
-                <h2 className="text-2xl font-display font-bold text-white">Horário Agendado!</h2>
-                <p className="text-white/60 text-sm mt-1">Detalhes da reserva</p>
-              </div>
-
-              <div className="bg-carbon border border-white/5 rounded-xl p-4 space-y-3 font-mono text-sm mb-6">
-                <div className="flex justify-between border-b border-white/5 pb-2">
-                  <span className="text-white/40">Cliente:</span>
-                  <span className="text-white text-right font-medium">{receipt.clientName}</span>
-                </div>
-                <div className="flex justify-between border-b border-white/5 pb-2">
-                  <span className="text-white/40">Serviços:</span>
-                  <span className="text-white text-right max-w-[150px] truncate">{receipt.services}</span>
-                </div>
-                <div className="flex justify-between border-b border-white/5 pb-2">
-                  <span className="text-white/40">Data:</span>
-                  <span className="text-gold font-medium">{receipt.date} às {receipt.time}</span>
-                </div>
-                {receipt.fee > 0 && (
-                 <div className="flex justify-between border-b border-white/5 pb-2 items-center">
-                    <span className="text-white/60 text-xs">Taxa de Reserva:</span>
-                    <span className="text-red-400 font-bold text-xs">R$ {receipt.fee.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center pt-2">
-                  <span className="text-white/60">Total Estimado*:</span>
-                  <span className="text-white font-bold text-lg">R$ {receipt.total.toFixed(2)}</span>
-                </div>
-              </div>
-
-              <p className="text-[10px] text-white/40 text-center mb-6 leading-relaxed">
-                *O valor final pode variar dependendo no local. Uma taxa de agendamento está inclusa (se aplicável), e deverá ser paga junto com o serviço no local. A perda do horário implica no não reembolso de taxas.
-              </p>
-
-              <div className="space-y-3">
-                <a 
-                  href={`https://wa.me/5581992941597?text=${encodeURIComponent(`💇‍♂️ *Novo Agendamento*\n\n*Cliente:* ${receipt.clientName}\n*Serviços:* ${receipt.services}\n*Data:* ${receipt.date} às ${receipt.time}\n*Total Estimado:* R$ ${receipt.total.toFixed(2)}${receipt.fee > 0 ? `\n\n*(Taxa de reserva de R$ ${receipt.fee.toFixed(2)} incluída)*` : ''}\n\nTe vejo lá!`)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-colors"
-                  onClick={() => setReceipt(null)}
-                >
-                  <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.878-.788-1.487-1.761-1.66-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/>
-                  </svg>
-                  Compartilhar no WhatsApp
-                </a>
-                <button 
-                  onClick={() => setReceipt(null)}
-                  className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3.5 rounded-xl transition-colors text-sm"
-                >
-                  Fechar
-                </button>
-              </div>
-
-            </motion.div>
-          </motion.div>
-        )}
+        <ReceiptModal
+          isOpen={!!receipt}
+          receipt={receipt}
+          onClose={() => setReceipt(null)}
+        />
       </AnimatePresence>
+
 
       <LoadingOverlay isVisible={isProcessing} />
       {/* Floating WhatsApp Contact Button */}

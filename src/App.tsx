@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import ClientPanel from './pages/ClientPanel';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
+import ClientAuth from './pages/ClientAuth';
 import { useAuth } from './hooks/useAuth';
 import { Toaster } from 'react-hot-toast';
 
@@ -33,6 +34,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<ClientPanel />} />
         <Route path="/login" element={<AdminLogin />} />
+        <Route path="/clube" element={<ClientAuth />} />
         <Route 
           path="/admin" 
           element={

@@ -14,7 +14,7 @@ export function useQueueTimers(
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Date.now());
-    }, 60000); // update every minute
+    }, 10000); // update every 10 seconds for real-time accuracy
     return () => clearInterval(interval);
   }, []);
 
@@ -58,8 +58,10 @@ export function useQueueTimers(
   const activeRemainingMinutes: Record<string, number> = {};
   const barberAvailability: Record<string, number> = {};
 
+  const activeBarbersList = barbers.filter(b => b.isActive);
+
   // Initialize barber availability
-  barbers.filter(b => b.isActive).forEach(barber => {
+  activeBarbersList.forEach(barber => {
      barberAvailability[barber.id] = now;
   });
 
@@ -95,9 +97,6 @@ export function useQueueTimers(
     
     if (ab.barberId && barberAvailability[ab.barberId] !== undefined) {
       barberAvailability[ab.barberId] = now + (remainingMins * 60000);
-    } else {
-      // If a barber is disabled or deleted but has an active booking, 
-      // we could add it back, but let's just ignore for queue calculation.
     }
   });
 
@@ -106,14 +105,54 @@ export function useQueueTimers(
   const exactStartTimes: Record<string, number> = {};
   
   const barberOccupiedIntervals: Record<string, { start: number; end: number; id: string }[]> = {};
-  barbers.filter(b => b.isActive).forEach(barber => {
+  activeBarbersList.forEach(barber => {
      barberOccupiedIntervals[barber.id] = [];
   });
 
-  // Assign breaks to corresponding barbers
+  // Assign breaks to corresponding barbers & push barber availability
   for (const b of breaks) {
-     if (barberOccupiedIntervals[b.barberId]) {
-        barberOccupiedIntervals[b.barberId].push({ start: b.startTime, end: b.startTime + (b.duration * 60000), id: b.id });
+     const durationMs = (b.duration || 0) * 60000;
+     let effectiveStart = b.startTime || now;
+
+     // If break is after_current, calculate dynamic start right after the active customer
+     if (b.type === 'after_current') {
+        if (b.barberId && b.barberId !== 'any') {
+           const activeBooking = activeBookings.find(ab => ab.barberId === b.barberId);
+           if (activeBooking && activeRemainingMinutes[activeBooking.id] !== undefined) {
+              effectiveStart = now + (activeRemainingMinutes[activeBooking.id] * 60000);
+           } else {
+              effectiveStart = now;
+           }
+        } else {
+           let maxActiveRem = 0;
+           if (b.targetBookingId) {
+              const target = activeBookings.find(ab => ab.id === b.targetBookingId);
+              if (target && activeRemainingMinutes[target.id] !== undefined) {
+                 maxActiveRem = activeRemainingMinutes[target.id];
+              }
+           } else if (activeBookings.length > 0) {
+              maxActiveRem = Math.max(...activeBookings.map(ab => activeRemainingMinutes[ab.id] || 0));
+           }
+           effectiveStart = now + (maxActiveRem * 60000);
+        }
+     }
+
+     const effectiveEnd = effectiveStart + durationMs;
+
+     const targetBarberIds = (b.barberId && b.barberId !== 'any')
+       ? (barberOccupiedIntervals[b.barberId] ? [b.barberId] : [])
+       : activeBarbersList.map(barber => barber.id);
+
+     for (const bId of targetBarberIds) {
+        if (barberOccupiedIntervals[bId]) {
+           barberOccupiedIntervals[bId].push({ start: effectiveStart, end: effectiveEnd, id: b.id });
+        }
+
+        // If the break is active now or after_current, the barber is unavailable until the break ends
+        const isCurrentActiveBreak = b.type === 'now' || (now >= effectiveStart && now < effectiveEnd);
+        if (isCurrentActiveBreak || b.type === 'after_current') {
+           barberAvailability[bId] = Math.max(barberAvailability[bId] || now, effectiveEnd);
+        }
      }
   }
 
@@ -159,7 +198,7 @@ export function useQueueTimers(
           if (item.type === 'scheduled') {
               proposedStart = Math.max(proposedStart, getSchedTime(item));
           }
-          actualStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[targetBarberId]);
+          actualStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[targetBarberId] || []);
       } else {
           // If 'any' or barber not found, find the earliest available gap among ALL active barbers
           const activeBarberIds = Object.keys(barberAvailability);
@@ -169,7 +208,7 @@ export function useQueueTimers(
                  if (item.type === 'scheduled') {
                      proposedStart = Math.max(proposedStart, getSchedTime(item));
                  }
-                 const possibleStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[bId]);
+                 const possibleStart = findNextGap(proposedStart, durationMs, barberOccupiedIntervals[bId] || []);
                  if (possibleStart < actualStart) {
                      actualStart = possibleStart;
                      assignedBarberId = bId;

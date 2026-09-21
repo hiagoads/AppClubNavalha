@@ -10,11 +10,36 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn();
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        ('email' in request.auth.token && request.auth.token.email == 'slvhiago2@gmail.com')
+      );
     }
 
     match /admins/{adminId} {
-      allow read: if isSignedIn() && request.auth.uid == adminId;
+      allow read: if isSignedIn() && (request.auth.uid == adminId || ('email' in request.auth.token && request.auth.token.email == 'slvhiago2@gmail.com'));
+      allow write: if isAdmin();
+    }
+
+    match /point_transactions/{transactionId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.clientId);
+      allow write: if isAdmin();
+    }
+    match /redemptions/{redemptionId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.clientId);
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.clientId;
+      allow update, delete: if isAdmin();
+    }
+
+    match /clients/{clientId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == clientId 
+                    && request.resource.data.keys().hasAll(['username', 'email', 'whatsapp', 'points', 'seasonalPoints', 'weeklyPoints', 'createdAt', 'firstName', 'lastName', 'dateOfBirth'])
+                    && request.resource.data.points == 0
+                    && request.resource.data.seasonalPoints == 0
+                    && request.resource.data.weeklyPoints == 0;
+      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == clientId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'whatsapp', 'avatarUrl', 'firstName', 'lastName', 'dateOfBirth']));
+      allow delete: if isAdmin() || (isSignedIn() && request.auth.uid == clientId);
     }
 
     match /barbers/{barberId} {
@@ -33,13 +58,13 @@ service cloud.firestore {
         request.resource.data.status == 'waiting' &&
         request.resource.data.clientName is string &&
         request.resource.data.clientWhatsapp is string;
-      
+        
       allow update: if 
         isAdmin() || 
         (
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime', 'serviceId', 'expectedPrice'])
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkInTime', 'serviceId', 'expectedPrice', 'notifiedJoined', 'notifiedPos2', 'notifiedApproaching', 'notifiedTurnArrived'])
         );
-      
+        
       allow delete: if isAdmin();
     }
 
@@ -53,8 +78,19 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    match /clients/{whatsapp} {
-      allow read, write: if isAdmin();
+    match /past_seasons/{seasonId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /vip_stations/{stationId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /vip_sessions/{sessionId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.clientId);
+      allow write: if isAdmin();
     }
   }
 }

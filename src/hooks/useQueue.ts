@@ -23,7 +23,7 @@ export function useQueue() {
       setBookings(docs);
       setLoading(false);
     }, (error) => {
-      console.error("Queue snap error:", error);
+      if (error.code !== "permission-denied") console.error("Queue snap error:", error);
       setLoading(false);
     });
 

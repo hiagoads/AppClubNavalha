@@ -33,7 +33,7 @@ export function useNotificationsManager(
           const body = `Sua posição atual é a #${position}. Tempo estimado: ${formatTime(waitMinutes)}.`;
           const success = await sendWebPush(booking.pushSubscription, title, body);
           
-          await updateDoc(doc(db, 'bookings', booking.id), { notifiedJoined: true });
+          try { await updateDoc(doc(db, 'bookings', booking.id), { notifiedJoined: true }); } catch(err: any) { if(err.code !== 'permission-denied') console.error(err); }
           processingRef.current.delete(booking.id);
         }
 
@@ -44,7 +44,7 @@ export function useNotificationsManager(
            const body = `Você é o número 2 na fila. Comece a se preparar!`;
            await sendWebPush(booking.pushSubscription, title, body);
            
-           await updateDoc(doc(db, 'bookings', booking.id), { notifiedPos2: true });
+           try { await updateDoc(doc(db, 'bookings', booking.id), { notifiedPos2: true }); } catch(err: any) { if(err.code !== 'permission-denied') console.error(err); }
            processingRef.current.delete(booking.id);
         }
 
@@ -55,7 +55,7 @@ export function useNotificationsManager(
            const body = `Faltam aproximadamente 15 minutos! Por favor, venha/retorne para a barbearia.`;
            await sendWebPush(booking.pushSubscription, title, body);
            
-           await updateDoc(doc(db, 'bookings', booking.id), { notifiedApproaching: true });
+           try { await updateDoc(doc(db, 'bookings', booking.id), { notifiedApproaching: true }); } catch(err: any) { if(err.code !== 'permission-denied') console.error(err); }
            processingRef.current.delete(booking.id);
         }
       }
@@ -67,7 +67,7 @@ export function useNotificationsManager(
          const body = `O barbeiro está pronto para te atender!`;
          await sendWebPush(activeBooking.pushSubscription, title, body);
          
-         await updateDoc(doc(db, 'bookings', activeBooking.id), { notifiedTurnArrived: true });
+         try { await updateDoc(doc(db, 'bookings', activeBooking.id), { notifiedTurnArrived: true }); } catch(err: any) { if(err.code !== 'permission-denied') console.error(err); }
          processingRef.current.delete(activeBooking.id);
       }
     };

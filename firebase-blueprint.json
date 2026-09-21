@@ -56,6 +56,21 @@
         "lastVisit": { "type": "string", "format": "date-time" }
       },
       "required": ["whatsapp", "name"]
+    },
+    "VipStation": {
+      "title": "VipStation",
+      "description": "Gaming station in the VIP room",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "consoleModel": { "type": "string" },
+        "consoleType": { "type": "string" },
+        "status": { "type": "string" },
+        "order": { "type": "number" },
+        "currentSession": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "consoleModel", "status"]
     }
   },
   "firestore": {
@@ -74,6 +89,10 @@
     "/clients": {
       "schema": "Client",
       "description": "Collection of clients"
+    },
+    "/vip_stations": {
+      "schema": "VipStation",
+      "description": "VIP room gaming stations and consoles"
     }
   }
 }
