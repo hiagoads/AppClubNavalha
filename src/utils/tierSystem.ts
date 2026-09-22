@@ -2,7 +2,8 @@ export const DEFAULT_THRESHOLDS = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
 
 export const getLevelTier = (
   points: number, 
-  thresholds: number[] = DEFAULT_THRESHOLDS
+  thresholds: number[] = DEFAULT_THRESHOLDS,
+  minTierLevel: number = 1
 ) => {
   const safePoints = Math.max(0, points || 0);
   let tierLevel = 1;
@@ -13,6 +14,12 @@ export const getLevelTier = (
       break;
     }
   }
+
+  // Trava de não-regressão: dentro da temporada, a patente nunca regride
+  if (minTierLevel && minTierLevel > tierLevel) {
+    tierLevel = minTierLevel;
+  }
+
   if (tierLevel > 8) tierLevel = 8;
   
   const currentThreshold = thresholds[tierLevel - 1] || 0;
@@ -22,7 +29,8 @@ export const getLevelTier = (
   if (tierLevel < 8 && thresholds.length > tierLevel) {
     nextThreshold = thresholds[tierLevel];
     const levelRange = nextThreshold - currentThreshold;
-    const pointsInLevel = Math.max(0, safePoints - currentThreshold);
+    const effectivePointsForProgress = Math.max(safePoints, currentThreshold);
+    const pointsInLevel = Math.max(0, effectivePointsForProgress - currentThreshold);
     progressPercentage = Math.min(100, Math.max(0, (pointsInLevel / levelRange) * 100));
   }
 
@@ -77,23 +85,51 @@ export const getLevelTier = (
 
 /**
  * Resolves a client's level (lifetime points) and tier (seasonal points).
+ * Regra: Dentro da temporada, uma vez que o cliente subir de Patente,
+ * ele NÃO regride de Patente mesmo se gastar seus pontos em resgates ou sofrer deduções.
  */
 export const getClientTier = (
-  client: { points?: number; seasonalPoints?: number; level?: number; lifetimePoints?: number },
+  client: { 
+    points?: number; 
+    seasonalPoints?: number; 
+    level?: number; 
+    lifetimePoints?: number;
+    seasonHighestPoints?: number;
+    highestSeasonalPoints?: number;
+    seasonHighestTierLevel?: number;
+    highestTierLevel?: number;
+  },
   thresholds: number[] = DEFAULT_THRESHOLDS
 ) => {
   const lifetime = Math.max(0, client.lifetimePoints ?? Math.max(client.points || 0, client.seasonalPoints || 0));
-  const seasonal = Math.max(0, client.seasonalPoints || 0);
+  
+  // Pontos de pico da temporada atual (não são reduzidos por resgates)
+  const peakSeasonalPoints = Math.max(
+    0,
+    client.seasonHighestPoints ?? 0,
+    client.highestSeasonalPoints ?? 0,
+    client.seasonalPoints ?? 0,
+    client.points ?? 0
+  );
+
+  // Patente mínima já conquistada nesta temporada
+  const minTier = Math.max(
+    1,
+    client.seasonHighestTierLevel ?? 1,
+    client.highestTierLevel ?? 1
+  );
 
   // Level is strictly 1 per 10,000 lifetime points
   const level = Math.floor(lifetime / 10000) + 1;
   
-  // Tier is based entirely on the current seasonal points
-  const tierInfo = getLevelTier(seasonal, thresholds);
+  // Tier is based on seasonal points without regression
+  const tierInfo = getLevelTier(peakSeasonalPoints, thresholds, minTier);
 
   return {
     level, // Nível do usuário
-    ...tierInfo
+    ...tierInfo,
+    effectiveSeasonalPoints: peakSeasonalPoints,
+    lockedTierLevel: tierInfo.tierLevel
   };
 };
 

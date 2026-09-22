@@ -25,6 +25,19 @@ export function EditClientServicesModal({
 }: EditClientServicesModalProps) {
   if (!isOpen || !editingServices) return null;
 
+  const getServicePrice = (s: Service) => {
+    if (!s) return 0;
+    const promo = parsePrice(s.promoPrice);
+    const reg = parsePrice(s.price);
+    return promo > 0 ? promo : reg;
+  };
+
+  const parsedItems = parseServiceString(editingServices.serviceId);
+  const totalExpectedPrice = parsedItems.reduce((acc, ps) => {
+    const s = services.find(x => x.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || x.id === ps.name);
+    return acc + (s ? getServicePrice(s) * ps.quantity : 0);
+  }, 0);
+
   return (
     <div className="fixed inset-0 bg-carbon/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-carbon-light border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
@@ -68,7 +81,8 @@ export function EditClientServicesModal({
                       className={`px-3 py-2 rounded-xl text-sm border font-medium transition-colors flex items-center gap-2 ${isSelected ? 'bg-gold/20 border-gold/50 text-gold shadow-sm shadow-gold/10' : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'}`}
                     >
                       {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-gold"></div>}
-                      {s.name}
+                      <span>{s.name}</span>
+                      <span className="text-xs font-mono text-white/50">R$ {getServicePrice(s).toFixed(2)}</span>
                     </button>
                   );
                 })}
@@ -76,7 +90,22 @@ export function EditClientServicesModal({
             </div>
           </div>
 
-          <div className="pt-4 flex justify-end gap-3">
+          {/* Valor Previsto Atualizado */}
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 flex justify-between items-center">
+            <div>
+              <span className="text-[10px] uppercase tracking-widest text-white/50 font-bold block">
+                Valor Previsto
+              </span>
+              <span className="text-xs text-white/40">
+                {parsedItems.length === 0 ? 'Nenhum selecionado' : `${parsedItems.length} selecionado(s)`}
+              </span>
+            </div>
+            <span className="text-gold font-bold text-xl font-mono">
+              R$ {totalExpectedPrice.toFixed(2)}
+            </span>
+          </div>
+
+          <div className="pt-2 flex justify-end gap-3">
             <button
               type="button"
               onClick={() => setEditingServices(null)}

@@ -203,13 +203,18 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
 
                 {/* Prêmios do Pódio da Semana */}
                 <div className="p-3 bg-gold/5 rounded-xl border border-gold/20">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <Gift className="w-3.5 h-3.5 text-gold" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-gold">
-                      Prêmios do Top 3 da Semana
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <Gift className="w-3.5 h-3.5 text-gold" />
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-gold">
+                        Prêmios do Top 3 da Semana
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-amber-400/90 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+                      Validade: 1 semana
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] mb-2">
                     <div className="flex items-center gap-2 p-1.5 rounded-lg bg-black/30 border border-yellow-500/20">
                       <span className="w-5 h-5 rounded-full bg-yellow-500 text-carbon font-bold flex items-center justify-center text-[10px] shrink-0">1º</span>
                       <span className="text-white/80 font-medium">Acesso Livre Sala VIP</span>
@@ -223,6 +228,9 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                       <span className="text-white/80 font-medium">Picolé Grátis</span>
                     </div>
                   </div>
+                  <p className="text-[10px] text-white/50 leading-tight">
+                    * Os bônus do pódio ficam disponíveis para resgate durante toda a semana seguinte (de segunda até o próximo fechamento semanal).
+                  </p>
                 </div>
               </div>
 

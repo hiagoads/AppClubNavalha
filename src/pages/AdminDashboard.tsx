@@ -5,7 +5,7 @@ import { useServices } from '../hooks/useServices';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { db, auth } from '../lib/firebase';
-import { doc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField, query, where, getDocs, increment } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField, query, where, getDocs, increment } from 'firebase/firestore';
 import { BookingStatus, Booking } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
@@ -35,8 +35,10 @@ import {
   X,
   Edit2,
   History,
-  AlertTriangle
-, ArrowLeft} from 'lucide-react';
+  AlertTriangle,
+  ArrowLeft,
+  Sparkles
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { useHistory } from '../hooks/useHistory';
@@ -83,7 +85,16 @@ export default function AdminDashboard() {
     timeStr: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
     durationStr: '60'
   });
-  const [newClientData, setNewClientData] = useState({
+  const [newClientData, setNewClientData] = useState<{
+    name: string;
+    whatsapp: string;
+    serviceId: string;
+    barberId: string;
+    type: string;
+    scheduledTime: string;
+    scheduledDate: string;
+    clientId?: string;
+  }>({
     name: '',
     whatsapp: '',
     serviceId: '',
@@ -91,6 +102,7 @@ export default function AdminDashboard() {
     type: 'walk-in',
     scheduledTime: '',
     scheduledDate: new Date().toISOString().split('T')[0],
+    clientId: '',
   });
 
   const [editingServicesBooking, setEditingServicesBooking] = useState<{id: string, serviceId: string, expectedPrice: number | string} | null>(null);
@@ -151,11 +163,21 @@ export default function AdminDashboard() {
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
         expectedPrice: expectedPrice,
+        ...(newClientData.clientId ? { clientId: newClientData.clientId } : {}),
         ...(isScheduled && { scheduledTime: newClientData.scheduledTime, scheduledDate: newClientData.scheduledDate }),
       });
       toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
       setIsAddingClient(false);
-      setNewClientData({ name: '', whatsapp: '', serviceId: '', barberId: 'any', type: 'walk-in', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0] });
+      setNewClientData({ 
+        name: '', 
+        whatsapp: '', 
+        serviceId: '', 
+        barberId: 'any', 
+        type: 'walk-in', 
+        scheduledTime: '', 
+        scheduledDate: new Date().toISOString().split('T')[0],
+        clientId: '' 
+      });
     } catch(err) {
       toast.error('Erro ao adicionar cliente');
     }
@@ -257,20 +279,44 @@ export default function AdminDashboard() {
     try {
       const activeInfo = completingBooking;
       
-      // Calculate final actual price to snapshot it
+      // Calculate final actual price to snapshot it, and separate services-only price for Clube Navalha points
       let finalPrice = 0;
-      if (activeInfo && activeInfo.expectedPrice !== undefined && activeInfo.expectedPrice !== null) {
-        finalPrice = Number(activeInfo.expectedPrice);
-      } else if (activeInfo && activeInfo.serviceId) {
+      let servicesOnlyPrice = 0;
+      let totalCalculated = 0;
+
+      if (activeInfo && activeInfo.serviceId) {
         const parsedServices = parseServiceString(activeInfo.serviceId);
         parsedServices.forEach(ps => {
            const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
            if (s) {
               const promo = parsePrice(s.promoPrice);
               const reg = parsePrice(s.price);
-              finalPrice += ((promo > 0) ? promo : reg) * ps.quantity;
+              const itemTotal = ((promo > 0) ? promo : reg) * ps.quantity;
+              totalCalculated += itemTotal;
+              // Regra de negócio: Apenas serviços geram pontos. Produtos não acumulam pontos!
+              if (!s.isProduct) {
+                servicesOnlyPrice += itemTotal;
+              }
            }
         });
+      }
+
+      if (activeInfo && activeInfo.expectedPrice !== undefined && activeInfo.expectedPrice !== null) {
+        finalPrice = Number(activeInfo.expectedPrice);
+        if (totalCalculated > 0) {
+          if (servicesOnlyPrice === 0) {
+            servicesOnlyPrice = 0;
+          } else if (servicesOnlyPrice < totalCalculated) {
+            const ratio = servicesOnlyPrice / totalCalculated;
+            servicesOnlyPrice = finalPrice * ratio;
+          } else {
+            servicesOnlyPrice = finalPrice;
+          }
+        } else {
+          servicesOnlyPrice = finalPrice;
+        }
+      } else {
+        finalPrice = totalCalculated;
       }
 
       const bookingRef = doc(db, 'bookings', completingBooking.id);
@@ -283,27 +329,66 @@ export default function AdminDashboard() {
         paidAt: serverTimestamp()
       });
 
-      // Gamification: Give points to client if registered
-      if (finalPrice > 0 && activeInfo && activeInfo.clientWhatsapp) {
+      // Gamification: Give points to client if registered (Apenas serviços pontuam, produtos NÃO pontuam)
+      const pointsToGive = Math.floor(servicesOnlyPrice * 100);
+
+      if (pointsToGive > 0 && activeInfo) {
         try {
-          // Normalize whatsapp number (just numbers)
-          const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
-          const clientsRef = collection(db, 'clients');
-          const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
-          const snapshot = await getDocs(q);
+          let clientDoc: any = null;
+          let clientData: any = null;
+
+          // 1. Prioritize lookup by linked clientId directly
+          if (activeInfo.clientId) {
+            const clientSnap = await getDoc(doc(db, 'clients', activeInfo.clientId));
+            if (clientSnap.exists()) {
+              clientDoc = clientSnap;
+              clientData = clientSnap.data();
+            }
+          }
+
+          // 2. Fallback to phone number query if not matched by clientId
+          if (!clientDoc && activeInfo.clientWhatsapp) {
+            const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
+            if (cleanPhone) {
+              const clientsRef = collection(db, 'clients');
+              const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
+              const snapshot = await getDocs(q);
+              if (!snapshot.empty) {
+                clientDoc = snapshot.docs[0];
+                clientData = clientDoc.data();
+              }
+            }
+          }
           
-          if (!snapshot.empty) {
-            // Client found! Add points
-            const pointsToGive = Math.floor(finalPrice * 100);
-            const clientDoc = snapshot.docs[0];
-            const clientData = clientDoc.data();
+          if (clientDoc && clientData) {
+            // Client found! Add points for services
             const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
             const newLifetime = existingLifetime + pointsToGive;
-            const updatedTier = getClientTier({ ...clientData, lifetimePoints: newLifetime });
+            const newSeasonal = (clientData.seasonalPoints || 0) + pointsToGive;
+            const newSeasonHighest = Math.max(
+              clientData.seasonHighestPoints ?? 0,
+              clientData.highestSeasonalPoints ?? 0,
+              newSeasonal,
+              (clientData.points || 0) + pointsToGive
+            );
+
+            const updatedTier = getClientTier({ 
+              ...clientData, 
+              points: (clientData.points || 0) + pointsToGive,
+              seasonalPoints: newSeasonal,
+              seasonHighestPoints: newSeasonHighest,
+              lifetimePoints: newLifetime 
+            });
+
+            const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, updatedTier.tierLevel);
 
             await updateDoc(doc(db, 'clients', clientDoc.id), {
               points: increment(pointsToGive),
               seasonalPoints: increment(pointsToGive),
+              seasonHighestPoints: newSeasonHighest,
+              highestSeasonalPoints: newSeasonHighest,
+              seasonHighestTierLevel: newHighestTier,
+              highestTierLevel: newHighestTier,
               weeklyPoints: increment(pointsToGive),
               lifetimePoints: increment(pointsToGive),
               level: updatedTier.level
@@ -312,10 +397,10 @@ export default function AdminDashboard() {
             // Register point transaction
             await addDoc(collection(db, 'point_transactions'), {
               clientId: clientDoc.id,
-              clientName: clientData.username,
+              clientName: clientData.username || clientData.firstName || activeInfo.clientName,
               points: pointsToGive,
               type: 'earned',
-              description: 'Corte/Serviço finalizado',
+              description: 'Pontos por serviços realizados',
               createdAt: new Date().toISOString()
             });
 
@@ -323,18 +408,24 @@ export default function AdminDashboard() {
             const updatedClient = {
               ...clientData,
               points: (clientData.points || 0) + pointsToGive,
-              seasonalPoints: (clientData.seasonalPoints || 0) + pointsToGive,
+              seasonalPoints: newSeasonal,
+              seasonHighestPoints: newSeasonHighest,
+              highestSeasonalPoints: newSeasonHighest,
+              seasonHighestTierLevel: newHighestTier,
+              highestTierLevel: newHighestTier,
               weeklyPoints: (clientData.weeklyPoints || 0) + pointsToGive,
               lifetimePoints: newLifetime,
               level: updatedTier.level
             };
             await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient);
             
-            toast.success(`${pointsToGive} pontos creditados para ${clientData.username}!`);
+            toast.success(`${pointsToGive} pontos de serviços creditados para ${clientData.username || clientData.firstName || 'o cliente'}!`);
           }
         } catch (e) {
           console.error("Error giving points:", e);
         }
+      } else if (finalPrice > 0 && activeInfo && (activeInfo.clientId || activeInfo.clientWhatsapp) && servicesOnlyPrice === 0) {
+        toast('Atendimento finalizado. (Produtos físicos não acumulam pontos no Clube)', { icon: 'ℹ️' });
       }
       
       if (activeInfo && activeInfo.pushSubscription) {
@@ -843,7 +934,18 @@ export default function AdminDashboard() {
                               {activeB.clientName[0]}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-2xl font-display font-bold truncate">{activeB.clientName}</h3>
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <h3 className="text-2xl font-display font-bold truncate">{activeB.clientName}</h3>
+                                {activeB.clientId && (
+                                  <span 
+                                    className="inline-flex items-center gap-1 bg-gold/15 text-gold border border-gold/30 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                                    title="Cliente cadastrado no Clube Navalha (Pontuará ao finalizar)"
+                                  >
+                                    <Sparkles className="w-2.5 h-2.5" />
+                                    Clube Navalha
+                                  </span>
+                                )}
+                              </div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="text-gold text-sm font-medium truncate">{activeB.serviceId}</p>
                                 <span className="text-green-400 font-bold text-sm bg-green-400/10 px-2 py-0.5 rounded ml-2">
@@ -961,6 +1063,15 @@ export default function AdminDashboard() {
                           <div className="text-white/20 font-mono text-xs sm:text-sm w-4 sm:w-6 pt-0.5 sm:pt-0 shrink-0">{idx + 1}</div>
                           <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
+                            {item.clientId && (
+                              <span 
+                                className="inline-flex items-center gap-1 bg-gold/15 text-gold border border-gold/30 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0" 
+                                title="Cliente cadastrado no Clube Navalha (Pontuará ao finalizar)"
+                              >
+                                <Sparkles className="w-2.5 h-2.5" />
+                                Clube Navalha
+                              </span>
+                            )}
                             <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
                               <span className="truncate">{item.serviceId}</span>
                               <button onClick={() => setEditingServicesBooking({id: item.id, serviceId: item.serviceId, expectedPrice: item.expectedPrice})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">

@@ -131,14 +131,14 @@ export default function ServicesManager() {
                 onClick={() => setFormData({ ...formData, isProduct: false })}
                 className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!formData.isProduct ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
               >
-                Serviço
+                Serviço (Gera Pontos)
               </button>
               <button
                 type="button"
                 onClick={() => setFormData({ ...formData, isProduct: true, duration: 0 })}
                 className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${formData.isProduct ? 'bg-carbon shadow-md text-gold' : 'text-white/40 hover:text-white'}`}
               >
-                Produto
+                Produto (Sem Pontos)
               </button>
             </div>
 
@@ -226,7 +226,7 @@ export default function ServicesManager() {
             {service.imageUrl ? (
               <div className="w-full h-48 bg-carbon relative">
                 <img src={service.imageUrl} alt={service.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white uppercase tracking-widest">
+                <div className={`absolute top-2 right-2 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold uppercase tracking-widest ${service.isProduct ? 'bg-white/10 text-white/60' : 'bg-gold/20 text-gold border border-gold/30'}`}>
                   {service.isProduct ? 'Produto' : 'Serviço'}
                 </div>
               </div>
@@ -234,7 +234,7 @@ export default function ServicesManager() {
               <div className="w-full h-48 bg-carbon/50 flex flex-col items-center justify-center text-white/20 relative">
                 {service.isProduct ? <Box className="w-12 h-12 mb-2" /> : <ImageIcon className="w-12 h-12 mb-2" />}
                 <span className="text-xs uppercase tracking-widest font-bold">Sem imagem</span>
-                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white uppercase tracking-widest">
+                <div className={`absolute top-2 right-2 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold uppercase tracking-widest ${service.isProduct ? 'bg-white/10 text-white/60' : 'bg-gold/20 text-gold border border-gold/30'}`}>
                   {service.isProduct ? 'Produto' : 'Serviço'}
                 </div>
               </div>
@@ -247,7 +247,7 @@ export default function ServicesManager() {
               </div>
               <p className="text-sm text-white/50 mb-6 flex items-center gap-1">
                  <span className="inline-block w-2 h-2 rounded-full bg-white/20"></span>
-                 {service.isProduct ? 'Produto Físico' : `Duração: ${formatTime(service.duration)}`}
+                 {service.isProduct ? 'Produto Físico • Não pontua' : `Duração: ${formatTime(service.duration)}`}
               </p>
 
               <div className="mt-auto flex gap-2 border-t border-white/10 pt-4">

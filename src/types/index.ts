@@ -65,6 +65,7 @@ export interface Booking {
   expectedPrice?: number | null; 
   price?: number | null; // Snapshotted price after completion
   isPaid?: boolean;
+  clientId?: string; // Linked Clube Navalha client account ID
   // Notification Flags
   notifiedJoined?: boolean;
   notifiedPos2?: boolean;
@@ -88,10 +89,12 @@ export interface ClientBonus {
   rankKey?: string;
   title: string;
   type: 'unlimited_vip' | 'vip_hours' | 'popsicle' | 'discount_50' | 'points';
+  category?: 'weekly_podium' | 'rank_level' | 'special';
   totalHours?: number; // For vip_hours
   usedHours?: number; // For vip_hours
   isRedeemed?: boolean; // For single-use bonuses
   createdAt: string;
+  expiresAt?: string; // Data/hora limite de expiração (ex: 7 dias / próximo fechamento)
 }
 
 export interface SeasonPodiumMember {
@@ -130,6 +133,10 @@ export interface ClientProfile {
   weeklyPoints?: number;
   level?: number;
   lifetimePoints?: number;
+  seasonHighestPoints?: number;
+  highestSeasonalPoints?: number;
+  seasonHighestTierLevel?: number;
+  highestTierLevel?: number;
   bonuses?: ClientBonus[];
   createdAt: string;
 }

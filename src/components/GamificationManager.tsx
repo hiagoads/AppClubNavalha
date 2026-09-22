@@ -212,45 +212,96 @@ export function GamificationManager() {
       const allClients: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const sortedClients = [...allClients].sort((a, b) => (b.weeklyPoints || 0) - (a.weeklyPoints || 0));
 
-for (let i = 0; i < sortedClients.length; i++) {
+      const now = new Date();
+      // O bônus fica disponível por exatamente 7 dias (até o próximo fechamento semanal no domingo seguinte)
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const createdAt = now.toISOString();
+
+      for (let i = 0; i < sortedClients.length; i++) {
         const c = sortedClients[i];
         const rank = i + 1;
         
-        let newBonuses = c.bonuses || [];
+        let clientBonuses: any[] = c.bonuses || [];
+
+        // 1. Limpar bônus semanais anteriores expirados ou não resgatados da semana que passou
+        // Bônus do tipo 'weekly_podium' ou com título contendo 'da Semana' são removidos no novo fechamento semanal
+        clientBonuses = clientBonuses.filter((b: any) => {
+          const isWeeklyBonus = b.category === 'weekly_podium' || 
+            (b.title && (b.title.includes('da Semana') || b.title.includes('Semanal')));
+          
+          // Se não é bônus semanal (ex: bônus permanente de patente/nível), preserva intacto
+          if (!isWeeklyBonus) return true;
+
+          // Se já expirou ou se é da semana anterior, não permanece
+          return false;
+        });
 
         const addBonusWithoutStacking = (bonusDef: any) => {
-          // Remove any existing active bonus of the SAME TYPE
-          newBonuses = newBonuses.filter((b: any) => {
+          // Remove qualquer outro ativo do mesmo tipo para garantir que prevaleça o novo
+          clientBonuses = clientBonuses.filter((b: any) => {
             if (b.type === bonusDef.type) {
               if (b.type === 'vip_hours') return (b.usedHours || 0) >= (b.totalHours || 1);
-              return b.isRedeemed === true; // Keep only if already redeemed
+              return b.isRedeemed === true;
             }
             return true;
           });
-          // Add the new fresh bonus
-          newBonuses.push(bonusDef);
+          // Adiciona o novo bônus semanal com a data de validade de 1 semana
+          clientBonuses.push(bonusDef);
         };
 
-const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
+        const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
         
         if (hasWeeklyPoints) {
           if (rank === 1) {
-            addBonusWithoutStacking({ id: crypto.randomUUID(), title: 'Acesso Livre VIP (1º da Semana)', type: 'unlimited_vip', isRedeemed: false, createdAt: new Date().toISOString() });
+            addBonusWithoutStacking({ 
+              id: crypto.randomUUID(), 
+              title: 'Acesso Livre VIP (1º da Semana)', 
+              type: 'unlimited_vip', 
+              category: 'weekly_podium',
+              isRedeemed: false, 
+              createdAt, 
+              expiresAt 
+            });
           } else if (rank === 2) {
-            addBonusWithoutStacking({ id: crypto.randomUUID(), title: '1 Hora VIP (2º da Semana)', type: 'vip_hours', totalHours: 1, usedHours: 0, createdAt: new Date().toISOString() });
-            addBonusWithoutStacking({ id: crypto.randomUUID(), title: 'Picolé Grátis (2º da Semana)', type: 'popsicle', isRedeemed: false, createdAt: new Date().toISOString() });
+            addBonusWithoutStacking({ 
+              id: crypto.randomUUID(), 
+              title: '1 Hora VIP (2º da Semana)', 
+              type: 'vip_hours', 
+              category: 'weekly_podium',
+              totalHours: 1, 
+              usedHours: 0, 
+              createdAt, 
+              expiresAt 
+            });
+            addBonusWithoutStacking({ 
+              id: crypto.randomUUID(), 
+              title: 'Picolé Grátis (2º da Semana)', 
+              type: 'popsicle', 
+              category: 'weekly_podium',
+              isRedeemed: false, 
+              createdAt, 
+              expiresAt 
+            });
           } else if (rank === 3) {
-            addBonusWithoutStacking({ id: crypto.randomUUID(), title: 'Picolé Grátis (3º da Semana)', type: 'popsicle', isRedeemed: false, createdAt: new Date().toISOString() });
+            addBonusWithoutStacking({ 
+              id: crypto.randomUUID(), 
+              title: 'Picolé Grátis (3º da Semana)', 
+              type: 'popsicle', 
+              category: 'weekly_podium',
+              isRedeemed: false, 
+              createdAt, 
+              expiresAt 
+            });
           }
         }
 
         await updateDoc(doc(db, 'clients', c.id), {
            weeklyPoints: 0,
-           bonuses: newBonuses
+           bonuses: clientBonuses
         });
       }
 
-      toast.success(`Semana encerrada! Prêmios distribuídos aos campeões e ranking reiniciado.`);
+      toast.success(`Semana encerrada! Prêmios do pódio concedidos com validade de 1 semana e ranking reiniciado.`);
     } catch (e: any) {
       console.error(e);
       toast.error('Erro ao encerrar a semana.');
@@ -265,15 +316,19 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
       const snap = await getDocs(collection(db, 'clients'));
       const allClients: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       
-      const sortedClients = [...allClients].sort((a, b) => (b.seasonalPoints || b.points || 0) - (a.seasonalPoints || a.points || 0));
+      const sortedClients = [...allClients].sort((a, b) => {
+        const ptsA = Math.max(a.seasonHighestPoints ?? 0, a.highestSeasonalPoints ?? 0, a.seasonalPoints ?? 0, a.points ?? 0);
+        const ptsB = Math.max(b.seasonHighestPoints ?? 0, b.highestSeasonalPoints ?? 0, b.seasonalPoints ?? 0, b.points ?? 0);
+        return ptsB - ptsA;
+      });
 
       const todayStr = new Date().toISOString().split('T')[0];
 
       // Build Podium snapshot
       const topPodium = sortedClients.slice(0, 3).map((c, idx) => {
         const pos = idx + 1;
-        const pts = c.seasonalPoints || c.points || 0;
-        const tier = getLevelTier(pts, tierThresholds);
+        const pts = Math.max(c.seasonHighestPoints ?? 0, c.highestSeasonalPoints ?? 0, c.seasonalPoints ?? 0, c.points ?? 0);
+        const tier = getClientTier(c, tierThresholds);
         let reward = '';
         if (pos === 1) reward = 'Ouro da Temporada';
         else if (pos === 2) reward = 'Prata da Temporada';
@@ -291,8 +346,8 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
 
       // Build Top 10 Ranking snapshot
       const seasonRanking = sortedClients.slice(0, 10).map((c, idx) => {
-        const pts = c.seasonalPoints || c.points || 0;
-        const tier = getLevelTier(pts, tierThresholds);
+        const pts = Math.max(c.seasonHighestPoints ?? 0, c.highestSeasonalPoints ?? 0, c.seasonalPoints ?? 0, c.points ?? 0);
+        const tier = getClientTier(c, tierThresholds);
         return {
           position: idx + 1,
           username: c.username || 'Cliente',
@@ -302,8 +357,8 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
         };
       });
 
-      const totalSeasonalPoints = sortedClients.reduce((acc, c) => acc + (c.seasonalPoints || c.points || 0), 0);
-      const totalParticipants = sortedClients.filter(c => (c.seasonalPoints || c.points || 0) > 0).length;
+      const totalSeasonalPoints = sortedClients.reduce((acc, c) => acc + Math.max(c.seasonHighestPoints ?? 0, c.highestSeasonalPoints ?? 0, c.seasonalPoints ?? 0, c.points ?? 0), 0);
+      const totalParticipants = sortedClients.filter(c => Math.max(c.seasonHighestPoints ?? 0, c.highestSeasonalPoints ?? 0, c.seasonalPoints ?? 0, c.points ?? 0) > 0).length;
 
       // 1. Save past season archive to Firestore
       await addDoc(collection(db, 'past_seasons'), {
@@ -331,6 +386,10 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
         await updateDoc(doc(db, 'clients', c.id), {
            points: 0,
            seasonalPoints: 0,
+           seasonHighestPoints: 0,
+           highestSeasonalPoints: 0,
+           seasonHighestTierLevel: 1,
+           highestTierLevel: 1,
            level: permanentLevel,
            lifetimePoints: existingLifetime
         });
@@ -569,9 +628,22 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
         const newLifetime = clientLifetime + pts;
         const newLevel = Math.max(clientData.level || 1, Math.floor(newLifetime / 10000) + 1);
 
+        const currentHighest = Math.max(
+          clientData.seasonHighestPoints ?? 0,
+          clientData.highestSeasonalPoints ?? 0,
+          newSeasonal,
+          newPts
+        );
+        const tierInfo = getLevelTier(currentHighest, tierThresholds, clientData.seasonHighestTierLevel ?? 1);
+        const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, tierInfo.tierLevel);
+
         await updateDoc(clientRef, {
           points: newPts,
           seasonalPoints: newSeasonal,
+          seasonHighestPoints: currentHighest,
+          highestSeasonalPoints: currentHighest,
+          seasonHighestTierLevel: newHighestTier,
+          highestTierLevel: newHighestTier,
           weeklyPoints: newWeekly,
           lifetimePoints: newLifetime,
           level: newLevel
@@ -582,6 +654,10 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
           id: selectedClient.id,
           points: newPts,
           seasonalPoints: newSeasonal,
+          seasonHighestPoints: currentHighest,
+          highestSeasonalPoints: currentHighest,
+          seasonHighestTierLevel: newHighestTier,
+          highestTierLevel: newHighestTier,
           weeklyPoints: newWeekly,
           lifetimePoints: newLifetime,
           level: newLevel
@@ -590,14 +666,10 @@ const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
       } else {
         // Remoção com piso zero estrito (NUNCA permite saldo negativo!)
         newPts = Math.max(0, currentPts - pts);
-        newSeasonal = Math.max(0, currentSeasonal - pts);
-        newWeekly = Math.max(0, currentWeekly - pts);
         deltaPoints = -(currentPts - newPts); // valor exato debitado do saldo
-
+        // Regra de não-regressão: a patente e os pontos sazonais nunca regridem ao debitar saldo gastável!
         await updateDoc(clientRef, {
-          points: newPts,
-          seasonalPoints: newSeasonal,
-          weeklyPoints: newWeekly
+          points: newPts
         });
       }
 

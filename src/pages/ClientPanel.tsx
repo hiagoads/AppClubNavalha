@@ -257,6 +257,7 @@ export default function ClientPanel() {
         type: isScheduled ? BookingType.SCHEDULED : BookingType.WALK_IN,
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
+        ...(clientProfile?.id ? { clientId: clientProfile.id } : {}),
         ...(isScheduled && { scheduledTime: formData.scheduledTime, scheduledDate: formData.scheduledDate }),
         ...(subJson && { pushSubscription: subJson })
       });

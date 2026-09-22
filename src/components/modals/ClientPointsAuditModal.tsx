@@ -19,6 +19,7 @@ import {
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { PointTransaction } from '../../types';
+import { DEFAULT_THRESHOLDS, getLevelTier } from '../../utils/tierSystem';
 import toast from 'react-hot-toast';
 
 interface ClientPointsAuditModalProps {
@@ -147,15 +148,22 @@ export function ClientPointsAuditModal({
       let newWeekly = 0;
       let pointsChange = 0;
 
+      let seasonHighest = Math.max(data.seasonHighestPoints ?? 0, data.highestSeasonalPoints ?? 0, currentSeasonal, currentPts);
+      let highestTier = data.seasonHighestTierLevel ?? data.highestTierLevel ?? 1;
+
       if (adjAction === 'add') {
         newPts = Math.max(0, currentPts + pts);
         newSeasonal = Math.max(0, currentSeasonal + pts);
         newWeekly = Math.max(0, currentWeekly + pts);
+        seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
+        const tierInfo = getLevelTier(seasonHighest, DEFAULT_THRESHOLDS, highestTier);
+        highestTier = Math.max(highestTier, tierInfo.tierLevel);
         pointsChange = pts;
       } else {
         // Remover com piso zero garantido (NUNCA fica negativo)
+        // Regra de não-regressão: a patente e os pontos de pico sazonais NUNCA regridem na dedução de saldo
         newPts = Math.max(0, currentPts - pts);
-        newSeasonal = Math.max(0, currentSeasonal - pts);
+        newSeasonal = currentSeasonal;
         newWeekly = Math.max(0, currentWeekly - pts);
         pointsChange = -(currentPts - newPts); // quantidade real debitada
       }
@@ -163,6 +171,10 @@ export function ClientPointsAuditModal({
       await updateDoc(clientRef, {
         points: newPts,
         seasonalPoints: newSeasonal,
+        seasonHighestPoints: seasonHighest,
+        highestSeasonalPoints: seasonHighest,
+        seasonHighestTierLevel: highestTier,
+        highestTierLevel: highestTier,
         weeklyPoints: newWeekly
       });
 
@@ -180,6 +192,10 @@ export function ClientPointsAuditModal({
         ...client,
         points: newPts,
         seasonalPoints: newSeasonal,
+        seasonHighestPoints: seasonHighest,
+        highestSeasonalPoints: seasonHighest,
+        seasonHighestTierLevel: highestTier,
+        highestTierLevel: highestTier,
         weeklyPoints: newWeekly
       };
       if (onClientUpdated) onClientUpdated(updated);

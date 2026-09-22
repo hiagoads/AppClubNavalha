@@ -15,6 +15,7 @@ import {
 import { collection, query, getDocs, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { VipStation, ClientProfile, ClientBonus } from '../../types';
+import { isBonusExpired } from '../../utils/bonusSystem';
 import toast from 'react-hot-toast';
 
 interface StartSessionModalProps {
@@ -81,7 +82,7 @@ export function StartSessionModal({
       return;
     }
 
-    const bonuses = selectedClient.bonuses || [];
+    const bonuses = (selectedClient.bonuses || []).filter(b => !isBonusExpired(b));
     const unlimited = bonuses.find(b => b.type === 'unlimited_vip' && !b.isRedeemed);
     if (unlimited) {
       setSessionType('unlimited_vip');
@@ -117,12 +118,12 @@ export function StartSessionModal({
   const getAvailableVipHours = (client: ClientProfile) => {
     if (!client.bonuses) return 0;
     return client.bonuses
-      .filter(b => b.type === 'vip_hours')
+      .filter(b => b.type === 'vip_hours' && !isBonusExpired(b))
       .reduce((acc, b) => acc + Math.max(0, (b.totalHours || 0) - (b.usedHours || 0)), 0);
   };
 
   const hasUnlimitedVip = (client: ClientProfile) => {
-    return client.bonuses?.some(b => b.type === 'unlimited_vip' && !b.isRedeemed) || false;
+    return client.bonuses?.some(b => b.type === 'unlimited_vip' && !b.isRedeemed && !isBonusExpired(b)) || false;
   };
 
   const handleSubmit = (e: React.FormEvent) => {

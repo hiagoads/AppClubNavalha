@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { X, User, Phone, CheckCircle2 } from 'lucide-react';
 import { Service } from '../../types';
-import { formatPhone, parsePhone } from '../../utils';
+import { formatPhone, parsePhone, parsePrice } from '../../utils';
 
 interface FormData {
   name: string;
@@ -35,6 +35,21 @@ export function JoinQueueModal({
   schedulingFee
 }: JoinQueueModalProps) {
   if (!isOpen) return null;
+
+  const getServicePrice = (s: Service) => {
+    if (!s) return 0;
+    const promo = parsePrice(s.promoPrice);
+    const reg = parsePrice(s.price);
+    return promo > 0 ? promo : reg;
+  };
+
+  const selectedServicesTotal = formData.serviceIds.reduce((acc, sName) => {
+    const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+    return acc + (s ? getServicePrice(s) : 0);
+  }, 0);
+
+  const isScheduled = formType === 'scheduled';
+  const totalExpectedPrice = selectedServicesTotal + (isScheduled ? Number(schedulingFee || 0) : 0);
 
   return (
     <motion.div 
@@ -129,9 +144,13 @@ export function JoinQueueModal({
 
           <div>
             <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Serviços Desejados</label>
-            <div className="grid grid-cols-2 gap-2 max-h-[30vh] overflow-y-auto pr-1 custom-scrollbar">
+            <div className="grid grid-cols-2 gap-2 max-h-[28vh] overflow-y-auto pr-1 custom-scrollbar">
               {services.map(s => {
                 const isSelected = formData.serviceIds.includes(s.name);
+                const regPrice = parsePrice(s.price);
+                const promoPrice = parsePrice(s.promoPrice);
+                const hasPromo = promoPrice > 0 && promoPrice < regPrice;
+
                 return (
                   <button
                     key={s.id}
@@ -146,16 +165,35 @@ export function JoinQueueModal({
                     }}
                     className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group ${
                       isSelected 
-                        ? 'bg-gold/10 border-gold/50 ring-1 ring-gold/20' 
+                        ? 'bg-gold/15 border-gold shadow-md shadow-gold/10 ring-1 ring-gold/40' 
                         : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
                     }`}
                   >
-                    <div className="flex justify-between items-start mb-1">
-                      <span className={`font-bold text-sm ${isSelected ? 'text-gold' : 'text-white'}`}>
+                    <div className="flex justify-between items-start gap-1">
+                      <span className={`font-bold text-sm leading-snug ${isSelected ? 'text-gold' : 'text-white'}`}>
                         {s.name}
                       </span>
                       {isSelected && (
-                        <CheckCircle2 className="w-4 h-4 text-gold shrink-0" />
+                        <CheckCircle2 className="w-4 h-4 text-gold shrink-0 mt-0.5" />
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-baseline gap-1.5">
+                      {hasPromo ? (
+                        <>
+                          <span className="text-xs font-bold text-gold font-mono">
+                            R$ {promoPrice.toFixed(2)}
+                          </span>
+                          <span className="text-[10px] text-white/40 line-through font-mono">
+                            R$ {regPrice.toFixed(2)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className={`text-xs font-semibold font-mono ${isSelected ? 'text-gold/90' : 'text-white/60'}`}>
+                          R$ {regPrice.toFixed(2)}
+                        </span>
+                      )}
+                      {s.duration > 0 && (
+                        <span className="text-[10px] text-white/30 ml-auto">{s.duration} min</span>
                       )}
                     </div>
                   </button>
@@ -164,11 +202,64 @@ export function JoinQueueModal({
             </div>
           </div>
 
+          {/* Valor Previsto dos Serviços */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-4 mt-2">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-[10px] uppercase tracking-widest text-white/50 font-bold block">
+                  Valor Previsto
+                </span>
+                <span className="text-xs text-white/50">
+                  {formData.serviceIds.length === 0 
+                    ? 'Nenhum serviço selecionado' 
+                    : `${formData.serviceIds.length} ${formData.serviceIds.length === 1 ? 'serviço selecionado' : 'serviços selecionados'}`}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-gold font-bold text-2xl font-mono block">
+                  R$ {totalExpectedPrice.toFixed(2)}
+                </span>
+                {isScheduled && Number(schedulingFee) > 0 && (
+                  <span className="text-[10px] text-white/40 block">
+                    Taxa inclusa: R$ {Number(schedulingFee).toFixed(2)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {formData.serviceIds.length > 0 && (
+              <div className="mt-3 pt-2.5 border-t border-white/5 space-y-1.5">
+                {formData.serviceIds.map(sName => {
+                  const s = services.find(x => x.name.trim().toLowerCase() === sName.trim().toLowerCase() || x.id === sName);
+                  if (!s) return null;
+                  const price = getServicePrice(s);
+                  return (
+                    <div key={sName} className="flex justify-between items-center text-xs">
+                      <span className="text-white/70 truncate pr-2">• {s.name}</span>
+                      <span className="font-mono text-white/90 font-medium shrink-0">R$ {price.toFixed(2)}</span>
+                    </div>
+                  );
+                })}
+                {isScheduled && Number(schedulingFee) > 0 && (
+                  <div className="flex justify-between items-center text-xs text-gold/80">
+                    <span className="truncate pr-2">• Taxa de Agendamento</span>
+                    <span className="font-mono font-medium shrink-0">R$ {Number(schedulingFee).toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <button 
             type="submit"
-            className="w-full bg-gold hover:bg-gold-light text-carbon font-bold py-3 sm:py-3.5 rounded-xl transition-colors mt-2"
+            className="w-full bg-gold hover:bg-gold-light text-carbon font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-gold/20 flex items-center justify-center gap-2 mt-2"
           >
-            Confirmar e Entrar
+            <span>{formType === 'scheduled' ? 'Confirmar Agendamento' : 'Confirmar e Entrar'}</span>
+            {totalExpectedPrice > 0 && (
+              <span className="bg-carbon/20 px-2.5 py-0.5 rounded-md text-xs font-mono font-bold">
+                R$ {totalExpectedPrice.toFixed(2)}
+              </span>
+            )}
           </button>
         </form>
       </motion.div>

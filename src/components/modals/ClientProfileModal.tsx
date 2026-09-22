@@ -4,7 +4,7 @@ import { X, Award, Clock, Star, Gift, Scissors, Gamepad2, History, User, CheckCi
 import { ClientProfile, VipStation } from '../../types';
 import { getLevelTier, getClientTier } from '../../utils/tierSystem';
 import { useGamificationSettings, RewardItem } from '../../hooks/useGamificationSettings';
-import { checkAndSyncClientRankBonuses } from '../../utils/bonusSystem';
+import { checkAndSyncClientRankBonuses, isBonusExpired, isBonusActive } from '../../utils/bonusSystem';
 import { ClientActiveGameCard } from '../vip/ClientActiveGameCard';
 import { db } from '../../lib/firebase';
 import { collection, query, where, getDocs, addDoc, onSnapshot } from 'firebase/firestore';
@@ -112,6 +112,11 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
     const bonus = confirmBonus;
     setConfirmBonus(null);
 
+    if (isBonusExpired(bonus)) {
+      toast.error('Este bônus semanal expirou e não está mais disponível para resgate.');
+      return;
+    }
+
     setLoading(true);
     try {
       let rewardTitle = bonus.title;
@@ -156,10 +161,13 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
   const recentRedemptions = timeline.filter(item => item._type === 'redeem').slice(0, 10);
 
   const activeBonuses = clientProfile?.bonuses?.filter(bonus => {
+    // Se o bônus semanal expirou, não exibe como ativo para resgate
+    if (isBonusExpired(bonus)) return false;
+
     if (bonus.type === 'vip_hours') {
       return (bonus.totalHours || 0) > (bonus.usedHours || 0);
     } else if (bonus.type === 'unlimited_vip') {
-      return true;
+      return !bonus.isRedeemed;
     } else {
       return !bonus.isRedeemed;
     }
@@ -302,17 +310,32 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
                       statusText = bonus.isRedeemed ? 'Já Utilizado' : (pendingRedemptionsForBonus.length > 0 ? 'Em Análise' : 'Disponível');
                    }
 
+                   const isWeekly = bonus.category === 'weekly_podium' || 
+                     (bonus.title && (bonus.title.includes('da Semana') || bonus.title.includes('Semanal')));
+
                    return (
                      <div 
                        key={bonus.id || `bonus-${idx}`} 
                        className={`min-w-[240px] w-[240px] shrink-0 snap-center rounded-2xl border p-5 flex flex-col relative overflow-hidden transition-colors ${canRedeem ? 'bg-gold/5 border-gold/30 hover:border-gold/50' : 'bg-white/5 border-white/10 opacity-60'}`}
                      >
-                       <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-4 ${canRedeem ? 'bg-gold/10 text-gold' : 'bg-white/10 text-white/40'}`}>
-                         <Gift className="w-5 h-5" />
+                       <div className="flex items-center justify-between mb-4">
+                         <div className={`w-12 h-12 rounded-full flex items-center justify-center ${canRedeem ? 'bg-gold/10 text-gold' : 'bg-white/10 text-white/40'}`}>
+                           <Gift className="w-5 h-5" />
+                         </div>
+                         {isWeekly && (
+                           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                             <Clock className="w-3 h-3" /> 1 Semana
+                           </span>
+                         )}
                        </div>
                        
                        <h4 className="font-bold text-lg text-white/90 leading-tight mb-2">{bonus.title}</h4>
-                       <p className={`text-xs font-medium mb-5 ${canRedeem ? 'text-gold' : 'text-white/40'}`}>{statusText}</p>
+                       <p className={`text-xs font-medium mb-2 ${canRedeem ? 'text-gold' : 'text-white/40'}`}>{statusText}</p>
+                       {isWeekly && (
+                         <p className="text-[10px] text-amber-300/70 mb-4 bg-amber-500/5 px-2 py-1 rounded-md border border-amber-500/10">
+                           Válido até o próximo fechamento semanal
+                         </p>
+                       )}
                        
                        <div className="mt-auto">
                          {canRedeem ? (
