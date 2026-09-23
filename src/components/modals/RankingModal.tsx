@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { getLevelTier, getClientTier } from '../../utils/tierSystem';
+import { getLevelTier, getClientTier, compareClientsForRanking } from '../../utils/tierSystem';
 import { useGamificationSettings } from '../../hooks/useGamificationSettings';
 import { PastSeason } from '../../types';
 
@@ -37,18 +37,32 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
   const loadCurrentRanking = async () => {
     setLoading(true);
     try {
+      // Carregamos os competidores da semana/temporada
       const q = query(
         collection(db, 'clients'),
-        orderBy('weeklyPoints', 'desc'),
-        limit(25)
+        limit(50)
       );
       const snap = await getDocs(q);
-      const data = snap.docs.map((doc, index) => ({
+      const allClients = snap.docs.map(doc => ({
         id: doc.id,
-        position: index + 1,
         ...doc.data()
       }));
-      setRanking(data.filter((c: any) => (c.weeklyPoints || 0) > 0 || (c.seasonalPoints || 0) > 0));
+
+      // Filtra apenas quem possui pontuação na semana ou temporada
+      const activeCompetitors = allClients.filter(
+        (c: any) => (c.weeklyPoints || 0) > 0 || (c.seasonalPoints || 0) > 0 || (c.points || 0) > 0
+      );
+
+      // Aplica a ordenação oficial com os 3 critérios de desempate
+      activeCompetitors.sort(compareClientsForRanking);
+
+      // Atribui posições com base na ordem desempatada
+      const rankedData = activeCompetitors.slice(0, 25).map((client, index) => ({
+        ...client,
+        position: index + 1
+      }));
+
+      setRanking(rankedData);
     } catch (e: any) {
       if (e.code !== 'permission-denied') console.error(e);
     } finally {
@@ -235,11 +249,19 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
               </div>
 
               {/* Título do Ranking */}
-              <div className="flex items-center justify-between px-1 pt-1">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-gold" /> Classificação Geral
-                </h3>
-                <span className="text-xs text-white/40">{ranking.length} competidores</span>
+              <div className="space-y-1 px-1 pt-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 flex items-center gap-2">
+                    <Crown className="w-4 h-4 text-gold" /> Classificação Geral
+                  </h3>
+                  <span className="text-xs text-white/40">{ranking.length} competidores</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[10px] text-white/40 bg-white/[0.03] px-2.5 py-1 rounded-lg border border-white/5">
+                  <Sparkles className="w-3 h-3 text-gold/70 shrink-0" />
+                  <span>
+                    Critério de desempate: 1º Pontos da Semana • 2º Ordem de Conquista (quem pontuou primeiro) • 3º Total Histórico Vitalício.
+                  </span>
+                </div>
               </div>
 
               {/* Lista do Ranking */}

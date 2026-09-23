@@ -4,6 +4,7 @@ import { auth, db } from '../lib/firebase';
 import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import { ClientProfile } from '../types';
 import { checkAndSyncClientRankBonuses } from '../utils/bonusSystem';
+import { sanitizeUsername } from '../utils';
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
@@ -60,8 +61,11 @@ export function useAuth() {
               if (!auth.currentUser) return;
               const checkDoc = await getDoc(doc(db, 'clients', u.uid));
               if (!checkDoc.exists()) {
+                const baseName = u.displayName || u.email?.split('@')[0] || 'cliente';
+                const sanitized = sanitizeUsername(baseName) || 'cliente';
+                const validUsername = sanitized.length < 5 ? (sanitized + 'club').slice(0, 15) : sanitized;
                 await setDoc(doc(db, 'clients', u.uid), {
-                  username: u.displayName || u.email?.split('@')[0] || 'Cliente',
+                  username: validUsername,
                   email: u.email || '',
                   avatarUrl: '',
                   whatsapp: '',

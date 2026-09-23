@@ -6,7 +6,7 @@ import {
   Gamepad2, Scissors, Edit2, Save, Trash2, Sparkles, RefreshCw, Calendar, Crown, Zap, 
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, History, AlertTriangle, ShieldAlert, FileText, ArrowUpRight, ArrowDownRight, ExternalLink 
 } from 'lucide-react';
-import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier } from '../utils/tierSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking } from '../utils/tierSystem';
 import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG } from '../utils/bonusSystem';
 import { DEFAULT_REWARDS, RewardItem, calculateSeasonDates } from '../hooks/useGamificationSettings';
 import toast from 'react-hot-toast';
@@ -157,6 +157,32 @@ export function GamificationManager() {
         currentSeasonNumber: Number(currentSeasonNumber),
         tierThresholds
       }, { merge: true });
+
+      // Atualiza também os clientes existentes cujas patentes salvas estejam desalinhadas com os novos limites
+      try {
+        const snap = await getDocs(collection(db, 'clients'));
+        for (const d of snap.docs) {
+          const clientData = d.data();
+          const peak = Math.max(
+            0,
+            clientData.seasonHighestPoints ?? 0,
+            clientData.highestSeasonalPoints ?? 0,
+            clientData.seasonalPoints ?? 0,
+            clientData.points ?? 0
+          );
+          const calculatedTier = getLevelTier(peak, tierThresholds, 1);
+          // Se a patente salva estava maior que a pontuação real permite pelas novas regras
+          if (clientData.seasonHighestTierLevel && clientData.seasonHighestTierLevel > calculatedTier.tierLevel) {
+            await updateDoc(doc(db, 'clients', d.id), {
+              seasonHighestTierLevel: calculatedTier.tierLevel,
+              highestTierLevel: calculatedTier.tierLevel
+            });
+          }
+        }
+      } catch (clientErr) {
+        console.warn('Erro ao atualizar patentes dos clientes com novos limites:', clientErr);
+      }
+
       toast.success('Configuração da Temporada salva!');
     } catch (e: any) {
       if (e.code !== 'permission-denied') console.error(e);
@@ -210,7 +236,8 @@ export function GamificationManager() {
     try {
       const snap = await getDocs(collection(db, 'clients'));
       const allClients: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const sortedClients = [...allClients].sort((a, b) => (b.weeklyPoints || 0) - (a.weeklyPoints || 0));
+      // Ordena com os 3 critérios oficiais de desempate
+      const sortedClients = [...allClients].sort(compareClientsForRanking);
 
       const now = new Date();
       // O bônus fica disponível por exatamente 7 dias (até o próximo fechamento semanal no domingo seguinte)
@@ -319,7 +346,8 @@ export function GamificationManager() {
       const sortedClients = [...allClients].sort((a, b) => {
         const ptsA = Math.max(a.seasonHighestPoints ?? 0, a.highestSeasonalPoints ?? 0, a.seasonalPoints ?? 0, a.points ?? 0);
         const ptsB = Math.max(b.seasonHighestPoints ?? 0, b.highestSeasonalPoints ?? 0, b.seasonalPoints ?? 0, b.points ?? 0);
-        return ptsB - ptsA;
+        if (ptsB !== ptsA) return ptsB - ptsA;
+        return compareClientsForRanking(a, b);
       });
 
       const todayStr = new Date().toISOString().split('T')[0];
@@ -637,6 +665,8 @@ export function GamificationManager() {
         const tierInfo = getLevelTier(currentHighest, tierThresholds, clientData.seasonHighestTierLevel ?? 1);
         const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, tierInfo.tierLevel);
 
+        const nowIso = new Date().toISOString();
+
         await updateDoc(clientRef, {
           points: newPts,
           seasonalPoints: newSeasonal,
@@ -646,7 +676,8 @@ export function GamificationManager() {
           highestTierLevel: newHighestTier,
           weeklyPoints: newWeekly,
           lifetimePoints: newLifetime,
-          level: newLevel
+          level: newLevel,
+          lastPointsUpdate: nowIso
         });
 
         const updatedClient = {
@@ -660,7 +691,8 @@ export function GamificationManager() {
           highestTierLevel: newHighestTier,
           weeklyPoints: newWeekly,
           lifetimePoints: newLifetime,
-          level: newLevel
+          level: newLevel,
+          lastPointsUpdate: nowIso
         };
         await checkAndSyncClientRankBonuses(selectedClient.id, updatedClient, tierThresholds);
       } else {
@@ -673,6 +705,8 @@ export function GamificationManager() {
         });
       }
 
+      const txDateIso = new Date().toISOString();
+
       // Registra transação no extrato oficial
       await addDoc(collection(db, 'point_transactions'), {
         clientId: selectedClient.id,
@@ -681,7 +715,7 @@ export function GamificationManager() {
         type: pointAction === 'add' ? 'manual_add' : 'manual_remove',
         description: addDescription || (pointAction === 'add' ? 'Bônus Manual' : 'Remoção Manual'),
         balanceAfter: newPts,
-        createdAt: new Date().toISOString()
+        createdAt: txDateIso
       });
 
       toast.success(`${pts} pontos ${pointAction === 'add' ? 'adicionados' : 'removidos'} para ${selectedClient.username}!`);
@@ -1716,6 +1750,7 @@ export function GamificationManager() {
           <thead className="text-xs uppercase bg-white/5 text-white/50 border-b border-white/10">
             <tr>
               <th className="px-4 py-3 rounded-tl-lg font-bold">Cliente</th>
+              <th className="px-4 py-3 font-bold">Patente</th>
               <th className="px-4 py-3 font-bold">Contato</th>
               <th className="px-4 py-3 font-bold">Nascimento</th>
               <th className="px-4 py-3 font-bold">Cadastro</th>
@@ -1724,7 +1759,9 @@ export function GamificationManager() {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {filteredClientList.map(client => (
+            {filteredClientList.map(client => {
+              const tier = getClientTier(client, tierThresholds);
+              return (
               <tr key={client.id} className={`hover:bg-white/5 transition-colors ${(client.points ?? 0) < 0 ? 'bg-red-950/20' : ''}`}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
@@ -1740,6 +1777,11 @@ export function GamificationManager() {
                       {client.firstName && <p className="text-[10px] text-white/40">@{client.username}</p>}
                     </div>
                   </div>
+                </td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${tier.bgColor} bg-opacity-20 ${tier.colorText} border border-current border-opacity-30`}>
+                    {tier.name} (Nv. {tier.tierLevel})
+                  </span>
                 </td>
                 <td className="px-4 py-3">
                   <p className="font-mono text-xs text-white/90">{client.whatsapp}</p>
@@ -1772,10 +1814,22 @@ export function GamificationManager() {
                         setIsAuditingOpen(true);
                       }}
                       className="text-xs font-bold text-white/70 hover:text-gold bg-white/5 hover:bg-gold/10 border border-white/10 hover:border-gold/30 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
-                      title="Ver extrato e movimentações de pontos"
+                      title="Ver extrato, ajustar saldo ou alterar patente"
                     >
                       <History className="w-3.5 h-3.5 text-gold" />
                       <span>Extrato</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setAuditClient(client);
+                        setIsAuditingOpen(true);
+                      }}
+                      className="text-xs font-bold text-purple-300 hover:text-purple-200 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 hover:border-purple-500/40 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+                      title="Editar manualmente a patente deste cliente"
+                    >
+                      <Crown className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Patente</span>
                     </button>
 
                     {(client.points ?? 0) < 0 && (
@@ -1796,10 +1850,11 @@ export function GamificationManager() {
                   </div>
                 </td>
               </tr>
-            ))}
+            );
+            })}
             {filteredClientList.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-white/40">
+                <td colSpan={7} className="px-4 py-8 text-center text-white/40">
                   Nenhum cliente encontrado.
                 </td>
               </tr>

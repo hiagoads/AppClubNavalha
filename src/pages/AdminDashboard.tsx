@@ -382,6 +382,8 @@ export default function AdminDashboard() {
 
             const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, updatedTier.tierLevel);
 
+            const nowIso = new Date().toISOString();
+
             await updateDoc(doc(db, 'clients', clientDoc.id), {
               points: increment(pointsToGive),
               seasonalPoints: increment(pointsToGive),
@@ -391,7 +393,8 @@ export default function AdminDashboard() {
               highestTierLevel: newHighestTier,
               weeklyPoints: increment(pointsToGive),
               lifetimePoints: increment(pointsToGive),
-              level: updatedTier.level
+              level: updatedTier.level,
+              lastPointsUpdate: nowIso
             });
             
             // Register point transaction
@@ -401,7 +404,7 @@ export default function AdminDashboard() {
               points: pointsToGive,
               type: 'earned',
               description: 'Pontos por serviços realizados',
-              createdAt: new Date().toISOString()
+              createdAt: nowIso
             });
 
             // Automatically check and award any rank bonuses if client reached new rank score

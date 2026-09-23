@@ -78,3 +78,61 @@ export function parsePhone(val: string): string {
   if (!val) return '';
   return val.replace(/\D/g, '').slice(0, 11);
 }
+
+/**
+ * Remove acentos, converte para minúsculas e remove espaços e caracteres especiais não permitidos.
+ * Mantém apenas letras minúsculas (a-z), números (0-9) e underscores opcionais se digitados.
+ */
+export function sanitizeUsername(val: string): string {
+  if (!val) return '';
+  return val
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // remove acentos
+    .toLowerCase()
+    .replace(/\s+/g, '') // remove qualquer espaço
+    .replace(/[^a-z0-9_.]/g, ''); // apenas a-z, números e _
+}
+
+export interface UsernameValidationResult {
+  isValid: boolean;
+  error?: string;
+}
+
+/**
+ * Validação rigorosa do nome de usuário:
+ * - Apenas letras minúsculas e números (sem acentos nem espaços)
+ * - Mínimo de 5 caracteres
+ */
+export function validateUsername(username: string): UsernameValidationResult {
+  if (!username) {
+    return { isValid: false, error: 'O nome de usuário é obrigatório.' };
+  }
+
+  // Verifica se tem espaços
+  if (/\s/.test(username)) {
+    return { isValid: false, error: 'O nome de usuário não pode conter espaços.' };
+  }
+
+  // Verifica se tem letras maiúsculas
+  if (/[A-Z]/.test(username)) {
+    return { isValid: false, error: 'Use apenas letras minúsculas.' };
+  }
+
+  // Verifica se tem acentos ou caracteres especiais acentuados
+  const normalized = username.normalize('NFD');
+  if (/[\u0300-\u036f]/.test(normalized)) {
+    return { isValid: false, error: 'O nome de usuário não pode conter acentos.' };
+  }
+
+  // Verifica comprimento mínimo de 5 caracteres
+  if (username.length < 5) {
+    return { isValid: false, error: 'O nome de usuário deve ter no mínimo 5 caracteres.' };
+  }
+
+  // Deve conter apenas a-z, 0-9 e _
+  if (!/^[a-z0-9_.]+$/.test(username)) {
+    return { isValid: false, error: 'Apenas letras minúsculas (sem acentos), números e sublinhados são permitidos.' };
+  }
+
+  return { isValid: true };
+}

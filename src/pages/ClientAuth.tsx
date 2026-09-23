@@ -7,7 +7,7 @@ import { X, Mail, Lock, User, Phone, Camera, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { formatPhone, parsePhone } from '../utils';
+import { formatPhone, parsePhone, sanitizeUsername, validateUsername } from '../utils';
 import { compressImage } from '../utils/imageUtils';
 import { sendEmailVerification } from 'firebase/auth';
 
@@ -79,6 +79,21 @@ export default function ClientAuth() {
           return;
         }
 
+        // Validação estrita das regras de Nome de Usuário:
+        // - Apenas letras minúsculas (sem maiúsculas)
+        // - Sem espaços
+        // - Sem acentos
+        // - Mínimo de 5 caracteres
+        // - Único no sistema
+        const normalizedUsername = sanitizeUsername(username);
+        const usernameCheck = validateUsername(normalizedUsername);
+        if (!usernameCheck.isValid) {
+          setFieldErrors(prev => ({ ...prev, username: usernameCheck.error }));
+          toast.error(usernameCheck.error || 'Nome de usuário inválido.');
+          setLoading(false);
+          return;
+        }
+
         // Check password length
         if (password.length < 6) {
           toast.error('A senha deve ter pelo menos 6 caracteres.');
@@ -90,18 +105,27 @@ export default function ClientAuth() {
         const u = userCredential.user;
 
         // Check availability after creating account (needs auth to read db)
-        const qUsername = query(collection(db, 'clients'), where('username', '==', username));
-        const snapUsername = await getDocs(qUsername);
+        // Busca com tolerância a dados legados: compara normalizado e em minúsculas
+        const allClientsSnap = await getDocs(collection(db, 'clients'));
         let hasError = false;
         const newErrors: any = {};
         
-        if (!snapUsername.empty) {
+        const usernameTaken = allClientsSnap.docs.some(doc => {
+          const raw = doc.data().username;
+          return raw && sanitizeUsername(raw) === normalizedUsername;
+        });
+
+        if (usernameTaken) {
             newErrors.username = 'Este nome de usuário já está em uso.';
             hasError = true;
         }
-        const qPhone = query(collection(db, 'clients'), where('whatsapp', '==', whatsapp));
-        const snapPhone = await getDocs(qPhone);
-        if (!snapPhone.empty) {
+
+        const phoneTaken = allClientsSnap.docs.some(doc => {
+          const raw = doc.data().whatsapp;
+          return raw && raw.replace(/\D/g, '') === whatsapp.replace(/\D/g, '');
+        });
+
+        if (phoneTaken) {
             newErrors.whatsapp = 'Este número de WhatsApp já está em uso.';
             hasError = true;
         }
@@ -112,11 +136,11 @@ export default function ClientAuth() {
             setLoading(false);
             return;
         }
-        await updateProfile(u, { displayName: username });
+        await updateProfile(u, { displayName: normalizedUsername });
 
         // Save client profile in firestore
         await setDoc(doc(db, 'clients', u.uid), {
-          username,
+          username: normalizedUsername,
           firstName,
           lastName,
           dateOfBirth,
@@ -246,18 +270,40 @@ export default function ClientAuth() {
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-2"><label className="block text-xs uppercase tracking-widest text-white/50">Nome de Usuário</label>{fieldErrors.username && <span className="text-[10px] text-red-500">{fieldErrors.username}</span>}</div>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block text-xs uppercase tracking-widest text-white/50">Nome de Usuário</label>
+                    {fieldErrors.username ? (
+                      <span className="text-[10px] text-red-400 font-medium">{fieldErrors.username}</span>
+                    ) : username && username.length < 5 ? (
+                      <span className="text-[10px] text-amber-400 font-medium">Mínimo 5 letras ({username.length}/5)</span>
+                    ) : username ? (
+                      <span className="text-[10px] text-emerald-400 font-medium font-mono">@{username}</span>
+                    ) : null}
+                  </div>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                     <input 
                       required={!isLogin}
                       type="text" 
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      placeholder="Ex: joaosilva"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
+                      onChange={(e) => {
+                        const clean = sanitizeUsername(e.target.value);
+                        setUsername(clean);
+                        if (fieldErrors.username) {
+                          setFieldErrors(prev => ({ ...prev, username: undefined }));
+                        }
+                      }}
+                      placeholder="ex: joaosilva"
+                      minLength={5}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck="false"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm font-mono lowercase"
                     />
                   </div>
+                  <p className="text-[11px] text-white/40 mt-1">
+                    Minúsculas, sem espaços ou acentos. Mínimo de 5 caracteres.
+                  </p>
                 </div>
                 
                 <div>

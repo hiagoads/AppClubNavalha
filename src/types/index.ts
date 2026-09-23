@@ -137,6 +137,7 @@ export interface ClientProfile {
   highestSeasonalPoints?: number;
   seasonHighestTierLevel?: number;
   highestTierLevel?: number;
+  lastPointsUpdate?: string; // Timestamp de quando os pontos foram atualizados (critério de desempate)
   bonuses?: ClientBonus[];
   createdAt: string;
 }

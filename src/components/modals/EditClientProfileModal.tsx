@@ -5,7 +5,7 @@ import { auth } from '../../lib/firebase';
 import { signOut, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { deleteDoc } from 'firebase/firestore';
 import { ClientProfile } from '../../types';
-import { formatPhone, parsePhone } from '../../utils';
+import { formatPhone, parsePhone, sanitizeUsername, validateUsername } from '../../utils';
 import { db } from '../../lib/firebase';
 import { doc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import toast from 'react-hot-toast';
@@ -103,26 +103,49 @@ export function EditClientProfileModal({ isOpen, onClose, clientProfile }: EditC
       return;
     }
 
+    // Regras rígidas para o Nome de Usuário:
+    // - Letras minúsculas
+    // - Não pode espaços
+    // - Não pode acentos
+    // - Mínimo de 5 letras
+    // - Tem que ser único
+    const normalizedUsername = sanitizeUsername(username);
+    const usernameCheck = validateUsername(normalizedUsername);
+    if (!usernameCheck.isValid) {
+      toast.error(usernameCheck.error || 'Nome de usuário inválido.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const qUsername = query(collection(db, 'clients'), where('username', '==', username.trim()));
-      const snapUsername = await getDocs(qUsername);
-      if (!snapUsername.empty && snapUsername.docs[0].id !== clientProfile.id) {
-          toast.error('Este nome de usuário já está em uso por outra pessoa.');
-          setIsSubmitting(false);
-          return;
+      const allClientsSnap = await getDocs(collection(db, 'clients'));
+
+      const isUsernameTaken = allClientsSnap.docs.some(d => {
+        if (d.id === clientProfile.id) return false;
+        const raw = d.data().username;
+        return raw && sanitizeUsername(raw) === normalizedUsername;
+      });
+
+      if (isUsernameTaken) {
+        toast.error('Este nome de usuário já está em uso por outra pessoa.');
+        setIsSubmitting(false);
+        return;
       }
-  
-      const qPhone = query(collection(db, 'clients'), where('whatsapp', '==', cleanPhone));
-      const snapPhone = await getDocs(qPhone);
-      if (!snapPhone.empty && snapPhone.docs[0].id !== clientProfile.id) {
-          toast.error('Este número de WhatsApp já está em uso por outra pessoa.');
-          setIsSubmitting(false);
-          return;
+
+      const isPhoneTaken = allClientsSnap.docs.some(d => {
+        if (d.id === clientProfile.id) return false;
+        const raw = d.data().whatsapp;
+        return raw && raw.replace(/\D/g, '') === cleanPhone;
+      });
+
+      if (isPhoneTaken) {
+        toast.error('Este número de WhatsApp já está em uso por outra pessoa.');
+        setIsSubmitting(false);
+        return;
       }
 
       await updateDoc(doc(db, 'clients', clientProfile.id), {
-        username: username.trim(),
+        username: normalizedUsername,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         dateOfBirth,
@@ -239,7 +262,14 @@ export function EditClientProfileModal({ isOpen, onClose, clientProfile }: EditC
           </div>
 
           <div>
-            <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-2">Nome de Usuário</label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-xs uppercase tracking-widest text-white/50 font-bold">Nome de Usuário</label>
+              {username && username.length < 5 ? (
+                <span className="text-[10px] text-amber-400 font-medium">Mínimo 5 letras ({username.length}/5)</span>
+              ) : username ? (
+                <span className="text-[10px] text-emerald-400 font-medium font-mono">@{username}</span>
+              ) : null}
+            </div>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <User className="h-5 w-5 text-gold/50" />
@@ -248,11 +278,18 @@ export function EditClientProfileModal({ isOpen, onClose, clientProfile }: EditC
                 type="text"
                 required
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-gold/50 transition-colors"
-                placeholder="Como gosta de ser chamado?"
+                onChange={(e) => setUsername(sanitizeUsername(e.target.value))}
+                minLength={5}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
+                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-gold/50 transition-colors font-mono text-sm lowercase"
+                placeholder="ex: joaosilva"
               />
             </div>
+            <p className="text-[11px] text-white/40 mt-1">
+              Minúsculas, sem espaços ou acentos. Mínimo de 5 caracteres.
+            </p>
           </div>
           
           <div>
