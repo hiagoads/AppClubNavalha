@@ -16,6 +16,7 @@ import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { Barber, Service, ClientProfile } from '../../types';
 import { getClientTier } from '../../utils/tierSystem';
+import { useGamificationSettings } from '../../hooks/useGamificationSettings';
 import { parsePrice, parseServiceString, stringifyServices, formatPhone, parsePhone } from '../../utils';
 
 export interface NewClientData {
@@ -50,6 +51,7 @@ export function AddClientModal({
   services,
   schedulingFee
 }: AddClientModalProps) {
+  const { thresholds } = useGamificationSettings();
   const [registeredClients, setRegisteredClients] = useState<ClientProfile[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [clientSearch, setClientSearch] = useState('');
@@ -240,7 +242,7 @@ export function AddClientModal({
                       <span className="font-bold text-gold font-mono">{selectedClient.points || 0} pts</span>
                       <span>•</span>
                       <span className="text-[10px] text-white/50 uppercase font-semibold">
-                        {getClientTier(selectedClient).name}
+                        {getClientTier(selectedClient, thresholds).name}
                       </span>
                     </div>
                   </div>

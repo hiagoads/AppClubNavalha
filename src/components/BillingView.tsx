@@ -17,6 +17,8 @@ import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { useBarbers } from '../hooks/useBarbers';
 import { formatTime, parsePrice, parseServiceString, stringifyServices } from '../utils';
+import { revertCompletedBookingGamification } from '../utils/revertBookingGamification';
+import { useGamificationSettings } from '../hooks/useGamificationSettings';
 
 type PeriodType = 'day' | 'week' | 'month' | 'period';
 
@@ -43,6 +45,7 @@ const getPaymentTime = (b: any) => {
 export default function BillingView() {
   const { services } = useServices();
   const { barbers } = useBarbers();
+  const { tierThresholds } = useGamificationSettings();
   const [period, setPeriod] = useState<PeriodType>('day');
   const [customStart, setCustomStart] = useState<string>(new Date().toISOString().split('T')[0]);
   const [customEnd, setCustomEnd] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -975,11 +978,24 @@ export default function BillingView() {
                   onClick={async () => {
                     if (confirmDeleteId === selectedClient.id) {
                       try {
+                        // Reverte pontos, XP, nível, patente e bônus associados ao serviço
+                        const revertResult = await revertCompletedBookingGamification(
+                          selectedClient,
+                          'Registro de serviço excluído no Faturamento',
+                          tierThresholds
+                        );
+
                         await deleteDoc(doc(db, 'bookings', selectedClient.id));
-                        toast.success('Registro do cliente excluído com sucesso!');
+
+                        if (revertResult.reverted && revertResult.pointsDeducted) {
+                          toast.success(`Registro excluído! ${revertResult.pointsDeducted} pontos estornados de ${revertResult.clientName || 'cliente'}.`);
+                        } else {
+                          toast.success('Registro do cliente excluído com sucesso!');
+                        }
                         setSelectedClient(null);
                         setConfirmDeleteId(null);
                       } catch (error) {
+                        console.error('Erro ao excluir registro:', error);
                         toast.error('Erro ao excluir registro');
                       }
                     } else {

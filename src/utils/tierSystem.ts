@@ -4,7 +4,24 @@ import { db } from '../lib/firebase';
 export const DEFAULT_THRESHOLDS = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
 
 // Dynamic cache of thresholds from Firestore settings, synchronized across the entire application
-let activeThresholds: number[] = [...DEFAULT_THRESHOLDS];
+const getInitialThresholds = (): number[] => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = localStorage.getItem('barbearia_tier_thresholds');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 8) {
+          return parsed.map((n: any) => Number(n) || 0);
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore storage errors
+  }
+  return [...DEFAULT_THRESHOLDS];
+};
+
+let activeThresholds: number[] = getInitialThresholds();
 
 try {
   onSnapshot(doc(db, 'settings', 'gamification'), (docSnap) => {
@@ -12,6 +29,13 @@ try {
       const data = docSnap.data();
       if (Array.isArray(data.tierThresholds) && data.tierThresholds.length >= 8) {
         activeThresholds = data.tierThresholds.map((n: any) => Number(n) || 0);
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            localStorage.setItem('barbearia_tier_thresholds', JSON.stringify(activeThresholds));
+          }
+        } catch (e) {
+          // ignore
+        }
       }
     }
   }, (err) => {
@@ -28,6 +52,13 @@ export const getActiveThresholds = (): number[] => activeThresholds;
 export const setActiveThresholds = (thresholds: number[]) => {
   if (Array.isArray(thresholds) && thresholds.length > 0) {
     activeThresholds = [...thresholds];
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('barbearia_tier_thresholds', JSON.stringify(activeThresholds));
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 };
 
@@ -130,10 +161,59 @@ export const getClientTier = (
     highestSeasonalPoints?: number;
     seasonHighestTierLevel?: number;
     highestTierLevel?: number;
+    manualTierLevel?: number;
+    manualTierOverride?: boolean;
   },
   thresholds?: number[]
 ) => {
   const lifetime = Math.max(0, client.lifetimePoints ?? Math.max(client.points || 0, client.seasonalPoints || 0));
+  const effectiveThresholds = (thresholds && thresholds.length >= 8) ? thresholds : activeThresholds;
+
+  // Level is strictly 1 per 10,000 lifetime points
+  const level = Math.floor(lifetime / 10000) + 1;
+
+  // Se houver override manual ativo definido pelo administrador
+  if (client.manualTierOverride && typeof client.manualTierLevel === 'number' && client.manualTierLevel >= 1 && client.manualTierLevel <= 8) {
+    const forcedTier = client.manualTierLevel;
+    const currentPoints = Math.max(0, client.seasonalPoints ?? client.points ?? 0);
+    const currentThreshold = effectiveThresholds[forcedTier - 1] || 0;
+    let nextThreshold = null;
+    let progressPercentage = 100;
+
+    if (forcedTier < 8 && effectiveThresholds.length > forcedTier) {
+      nextThreshold = effectiveThresholds[forcedTier];
+      const levelRange = nextThreshold - currentThreshold;
+      const effectivePointsForProgress = Math.max(currentPoints, currentThreshold);
+      const pointsInLevel = Math.max(0, effectivePointsForProgress - currentThreshold);
+      progressPercentage = levelRange > 0 ? Math.min(100, Math.max(0, (pointsInLevel / levelRange) * 100)) : 100;
+    }
+
+    const theme = getTierTheme(forcedTier);
+    const getFrameUrl = (lvl: number) => {
+      if (lvl === 1) return null;
+      if (lvl === 2) return '/frames/bronze.png';
+      if (lvl === 3) return '/frames/prata.png';
+      if (lvl === 4) return '/frames/ouro.png';
+      if (lvl === 5) return '/frames/platina.png';
+      if (lvl === 6) return '/frames/diamante.png';
+      if (lvl === 7) return '/frames/elite.png';
+      return '/frames/lenda.png';
+    };
+
+    return {
+      level,
+      tierLevel: forcedTier,
+      name: getTierName(forcedTier),
+      colorText: theme.text,
+      bgColor: theme.bg,
+      frameUrl: getFrameUrl(forcedTier),
+      progressPercentage,
+      currentThreshold,
+      nextThreshold,
+      effectiveSeasonalPoints: currentPoints,
+      lockedTierLevel: forcedTier
+    };
+  }
   
   // Pontos de pico da temporada atual (não são reduzidos por resgates)
   const peakSeasonalPoints = Math.max(
@@ -150,12 +230,8 @@ export const getClientTier = (
     client.seasonHighestTierLevel ?? 1,
     client.highestTierLevel ?? 1
   );
-
-  // Level is strictly 1 per 10,000 lifetime points
-  const level = Math.floor(lifetime / 10000) + 1;
   
   // Tier is based on seasonal points without regression
-  const effectiveThresholds = (thresholds && thresholds.length >= 8) ? thresholds : activeThresholds;
   const tierInfo = getLevelTier(peakSeasonalPoints, effectiveThresholds, minTier);
 
   return {

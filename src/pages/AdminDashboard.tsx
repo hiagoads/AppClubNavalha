@@ -17,6 +17,7 @@ import QueueLogView from '../components/QueueLogView';
 import { formatTime, parsePrice, parseServiceString, stringifyServices, parsePhone } from '../utils';
 import { checkAndSyncClientRankBonuses } from '../utils/bonusSystem';
 import { getClientTier, DEFAULT_THRESHOLDS } from '../utils/tierSystem';
+import { useGamificationSettings } from '../hooks/useGamificationSettings';
 import { 
   Play, 
   Pause,
@@ -64,6 +65,7 @@ export default function AdminDashboard() {
   const { barbers } = useBarbers();
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus, schedulingFee } = useSettings();
+  const { thresholds } = useGamificationSettings();
   const queueTimers = useQueueTimers(activeBookings, queue, services, breaks, barbers);
   const { isProcessing, withProcessing } = useProcessing();
   const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes } = queueTimers;
@@ -320,23 +322,13 @@ export default function AdminDashboard() {
       }
 
       const bookingRef = doc(db, 'bookings', completingBooking.id);
-      await updateDoc(bookingRef, {
-        status: BookingStatus.COMPLETED,
-        estimatedEndTime: serverTimestamp(),
-        price: finalPrice > 0 ? finalPrice : null, // Save price snapshot
-        barberId: completionBarberId, // Assign actual barber
-        isPaid: true,
-        paidAt: serverTimestamp()
-      });
-
-      // Gamification: Give points to client if registered (Apenas serviços pontuam, produtos NÃO pontuam)
       const pointsToGive = Math.floor(servicesOnlyPrice * 100);
+
+      let clientDoc: any = null;
+      let clientData: any = null;
 
       if (pointsToGive > 0 && activeInfo) {
         try {
-          let clientDoc: any = null;
-          let clientData: any = null;
-
           // 1. Prioritize lookup by linked clientId directly
           if (activeInfo.clientId) {
             const clientSnap = await getDoc(doc(db, 'clients', activeInfo.clientId));
@@ -359,71 +351,91 @@ export default function AdminDashboard() {
               }
             }
           }
+        } catch (e) {
+          console.error("Error looking up client for points:", e);
+        }
+      }
+
+      await updateDoc(bookingRef, {
+        status: BookingStatus.COMPLETED,
+        estimatedEndTime: serverTimestamp(),
+        price: finalPrice > 0 ? finalPrice : null, // Save price snapshot
+        barberId: completionBarberId, // Assign actual barber
+        isPaid: true,
+        paidAt: serverTimestamp(),
+        pointsAwarded: (clientDoc && pointsToGive > 0) ? pointsToGive : 0,
+        awardedClientId: clientDoc ? clientDoc.id : null
+      });
+
+      // Gamification: Give points to client if registered (Apenas serviços pontuam, produtos NÃO pontuam)
+      if (pointsToGive > 0 && clientDoc && clientData) {
+        try {
+          // Client found! Add points for services
+          const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
+          const newLifetime = existingLifetime + pointsToGive;
+          const newSeasonal = (clientData.seasonalPoints || 0) + pointsToGive;
+          const newSeasonHighest = Math.max(
+            clientData.seasonHighestPoints ?? 0,
+            clientData.highestSeasonalPoints ?? 0,
+            newSeasonal,
+            (clientData.points || 0) + pointsToGive
+          );
+
+          const updatedTier = getClientTier({ 
+            ...clientData, 
+            points: (clientData.points || 0) + pointsToGive,
+            seasonalPoints: newSeasonal,
+            seasonHighestPoints: newSeasonHighest,
+            lifetimePoints: newLifetime 
+          }, thresholds);
+
+          const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, updatedTier.tierLevel);
+
+          const nowIso = new Date().toISOString();
+
+          await updateDoc(doc(db, 'clients', clientDoc.id), {
+            points: increment(pointsToGive),
+            seasonalPoints: increment(pointsToGive),
+            seasonHighestPoints: newSeasonHighest,
+            highestSeasonalPoints: newSeasonHighest,
+            seasonHighestTierLevel: newHighestTier,
+            highestTierLevel: newHighestTier,
+            weeklyPoints: increment(pointsToGive),
+            lifetimePoints: increment(pointsToGive),
+            level: updatedTier.level,
+            manualTierOverride: false,
+            manualTierLevel: newHighestTier,
+            lastPointsUpdate: nowIso
+          });
           
-          if (clientDoc && clientData) {
-            // Client found! Add points for services
-            const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
-            const newLifetime = existingLifetime + pointsToGive;
-            const newSeasonal = (clientData.seasonalPoints || 0) + pointsToGive;
-            const newSeasonHighest = Math.max(
-              clientData.seasonHighestPoints ?? 0,
-              clientData.highestSeasonalPoints ?? 0,
-              newSeasonal,
-              (clientData.points || 0) + pointsToGive
-            );
+          // Register point transaction
+          await addDoc(collection(db, 'point_transactions'), {
+            clientId: clientDoc.id,
+            clientName: clientData.username || clientData.firstName || activeInfo.clientName,
+            points: pointsToGive,
+            type: 'earned',
+            description: 'Pontos por serviços realizados',
+            bookingId: completingBooking.id,
+            balanceAfter: (clientData.points || 0) + pointsToGive,
+            createdAt: nowIso
+          });
 
-            const updatedTier = getClientTier({ 
-              ...clientData, 
-              points: (clientData.points || 0) + pointsToGive,
-              seasonalPoints: newSeasonal,
-              seasonHighestPoints: newSeasonHighest,
-              lifetimePoints: newLifetime 
-            });
-
-            const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, updatedTier.tierLevel);
-
-            const nowIso = new Date().toISOString();
-
-            await updateDoc(doc(db, 'clients', clientDoc.id), {
-              points: increment(pointsToGive),
-              seasonalPoints: increment(pointsToGive),
-              seasonHighestPoints: newSeasonHighest,
-              highestSeasonalPoints: newSeasonHighest,
-              seasonHighestTierLevel: newHighestTier,
-              highestTierLevel: newHighestTier,
-              weeklyPoints: increment(pointsToGive),
-              lifetimePoints: increment(pointsToGive),
-              level: updatedTier.level,
-              lastPointsUpdate: nowIso
-            });
-            
-            // Register point transaction
-            await addDoc(collection(db, 'point_transactions'), {
-              clientId: clientDoc.id,
-              clientName: clientData.username || clientData.firstName || activeInfo.clientName,
-              points: pointsToGive,
-              type: 'earned',
-              description: 'Pontos por serviços realizados',
-              createdAt: nowIso
-            });
-
-            // Automatically check and award any rank bonuses if client reached new rank score
-            const updatedClient = {
-              ...clientData,
-              points: (clientData.points || 0) + pointsToGive,
-              seasonalPoints: newSeasonal,
-              seasonHighestPoints: newSeasonHighest,
-              highestSeasonalPoints: newSeasonHighest,
-              seasonHighestTierLevel: newHighestTier,
-              highestTierLevel: newHighestTier,
-              weeklyPoints: (clientData.weeklyPoints || 0) + pointsToGive,
-              lifetimePoints: newLifetime,
-              level: updatedTier.level
-            };
-            await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient);
-            
-            toast.success(`${pointsToGive} pontos de serviços creditados para ${clientData.username || clientData.firstName || 'o cliente'}!`);
-          }
+          // Automatically check and award any rank bonuses if client reached new rank score
+          const updatedClient = {
+            ...clientData,
+            points: (clientData.points || 0) + pointsToGive,
+            seasonalPoints: newSeasonal,
+            seasonHighestPoints: newSeasonHighest,
+            highestSeasonalPoints: newSeasonHighest,
+            seasonHighestTierLevel: newHighestTier,
+            highestTierLevel: newHighestTier,
+            weeklyPoints: (clientData.weeklyPoints || 0) + pointsToGive,
+            lifetimePoints: newLifetime,
+            level: updatedTier.level
+          };
+          await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient);
+          
+          toast.success(`${pointsToGive} pontos de serviços creditados para ${clientData.username || clientData.firstName || 'o cliente'}!`);
         } catch (e) {
           console.error("Error giving points:", e);
         }

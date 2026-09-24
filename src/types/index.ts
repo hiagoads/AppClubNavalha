@@ -65,6 +65,8 @@ export interface Booking {
   expectedPrice?: number | null; 
   price?: number | null; // Snapshotted price after completion
   isPaid?: boolean;
+  pointsAwarded?: number;
+  awardedClientId?: string;
   clientId?: string; // Linked Clube Navalha client account ID
   // Notification Flags
   notifiedJoined?: boolean;
@@ -137,6 +139,8 @@ export interface ClientProfile {
   highestSeasonalPoints?: number;
   seasonHighestTierLevel?: number;
   highestTierLevel?: number;
+  manualTierLevel?: number;
+  manualTierOverride?: boolean;
   lastPointsUpdate?: string; // Timestamp de quando os pontos foram atualizados (critério de desempate)
   bonuses?: ClientBonus[];
   createdAt: string;
@@ -197,5 +201,6 @@ export interface PointTransaction {
   type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction';
   description: string;
   balanceAfter?: number;
+  bookingId?: string;
   createdAt: string;
 }

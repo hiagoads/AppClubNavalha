@@ -21,7 +21,8 @@ import {
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { PointTransaction } from '../../types';
-import { DEFAULT_THRESHOLDS, getLevelTier, getTierName, getTierTheme } from '../../utils/tierSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, getTierName, getTierTheme, getClientTier } from '../../utils/tierSystem';
+import { useGamificationSettings } from '../../hooks/useGamificationSettings';
 import toast from 'react-hot-toast';
 
 interface ClientPointsAuditModalProps {
@@ -37,6 +38,7 @@ export function ClientPointsAuditModal({
   client,
   onClientUpdated
 }: ClientPointsAuditModalProps) {
+  const { thresholds } = useGamificationSettings();
   const [transactions, setTransactions] = useState<PointTransaction[]>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(true);
   const [filterType, setFilterType] = useState<'all' | 'positive' | 'negative'>('all');
@@ -171,7 +173,7 @@ export function ClientPointsAuditModal({
         newSeasonal = Math.max(0, currentSeasonal + pts);
         newWeekly = Math.max(0, currentWeekly + pts);
         seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
-        const tierInfo = getLevelTier(seasonHighest, undefined, highestTier);
+        const tierInfo = getLevelTier(seasonHighest, thresholds, highestTier);
         highestTier = Math.max(highestTier, tierInfo.tierLevel);
         pointsChange = pts;
       } else {
@@ -185,7 +187,7 @@ export function ClientPointsAuditModal({
 
       const nowIso = new Date().toISOString();
 
-      await updateDoc(clientRef, {
+      const updateData: any = {
         points: newPts,
         seasonalPoints: newSeasonal,
         seasonHighestPoints: seasonHighest,
@@ -194,7 +196,14 @@ export function ClientPointsAuditModal({
         highestTierLevel: highestTier,
         weeklyPoints: newWeekly,
         lastPointsUpdate: nowIso
-      });
+      };
+
+      if (adjAction === 'add') {
+        updateData.manualTierOverride = false;
+        updateData.manualTierLevel = highestTier;
+      }
+
+      await updateDoc(clientRef, updateData);
 
       await addDoc(collection(db, 'point_transactions'), {
         clientId: client.id,
@@ -208,14 +217,7 @@ export function ClientPointsAuditModal({
 
       const updated = {
         ...client,
-        points: newPts,
-        seasonalPoints: newSeasonal,
-        seasonHighestPoints: seasonHighest,
-        highestSeasonalPoints: seasonHighest,
-        seasonHighestTierLevel: highestTier,
-        highestTierLevel: highestTier,
-        weeklyPoints: newWeekly,
-        lastPointsUpdate: nowIso
+        ...updateData
       };
       if (onClientUpdated) onClientUpdated(updated);
 
@@ -249,11 +251,28 @@ export function ClientPointsAuditModal({
       const targetTierName = getTierName(selectedTierLevel);
       const previousTierName = getTierName(previousTierLevel);
 
+      const targetThreshold = thresholds[selectedTierLevel - 1] || 0;
+      const effectivePts = Math.min(data.points ?? 0, targetThreshold);
+      const effectiveSeasonal = Math.min(data.seasonalPoints ?? 0, targetThreshold);
+
       // Atualiza diretamente no Firestore sobrescrevendo as travas de pico de patente
-      await updateDoc(clientRef, {
+      // e ajustando os pontos de pico para não forçar a subida de volta caso o cliente esteja acima
+      const updatePayload: any = {
         seasonHighestTierLevel: selectedTierLevel,
-        highestTierLevel: selectedTierLevel
-      });
+        highestTierLevel: selectedTierLevel,
+        manualTierLevel: selectedTierLevel,
+        manualTierOverride: true,
+        seasonHighestPoints: effectiveSeasonal,
+        highestSeasonalPoints: effectiveSeasonal,
+        seasonalPoints: effectiveSeasonal
+      };
+
+      // Se o cliente foi rebaixado para um nível abaixo dos pontos atuais, ajusta os pontos para condizer
+      if ((data.points ?? 0) > targetThreshold) {
+        updatePayload.points = targetThreshold;
+      }
+
+      await updateDoc(clientRef, updatePayload);
 
       // Registra no extrato de auditoria a alteração manual da patente pelo administrador
       await addDoc(collection(db, 'point_transactions'), {
@@ -262,15 +281,14 @@ export function ClientPointsAuditModal({
         points: 0,
         type: 'tier_override',
         description: tierOverrideReason || `Patente alterada manualmente pelo Adm: de ${previousTierName} para ${targetTierName}`,
-        balanceAfter: data.points ?? client.points ?? 0,
+        balanceAfter: updatePayload.points ?? data.points ?? client.points ?? 0,
         createdAt: new Date().toISOString()
       });
 
       const updated = {
         ...client,
         ...data,
-        seasonHighestTierLevel: selectedTierLevel,
-        highestTierLevel: selectedTierLevel
+        ...updatePayload
       };
       if (onClientUpdated) onClientUpdated(updated);
 
@@ -433,12 +451,11 @@ export function ClientPointsAuditModal({
               </span>
               <div className="mt-1 flex items-center gap-1.5">
                 {(() => {
-                  const cTierLevel = client.seasonHighestTierLevel ?? client.highestTierLevel ?? 1;
-                  const cTheme = getTierTheme(cTierLevel);
+                  const clientTier = getClientTier(client, thresholds);
                   return (
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cTheme.bg} bg-opacity-20 ${cTheme.text} border border-current border-opacity-30 inline-flex items-center gap-1`}>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${clientTier.bgColor} bg-opacity-20 ${clientTier.colorText} border border-current border-opacity-30 inline-flex items-center gap-1`}>
                       <Crown className="w-3 h-3" />
-                      {getTierName(cTierLevel)} ({cTierLevel})
+                      {clientTier.name} ({clientTier.tierLevel})
                     </span>
                   );
                 })()}
@@ -634,7 +651,7 @@ export function ClientPointsAuditModal({
                     type="number"
                     required
                     min="1"
-                    placeholder="Pontos (ex: 500)"
+                    placeholder="Quantidade de pontos (ex: 100)"
                     value={adjPoints}
                     onChange={(e) => setAdjPoints(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white font-mono placeholder:text-white/30 focus:outline-none focus:border-gold/50"

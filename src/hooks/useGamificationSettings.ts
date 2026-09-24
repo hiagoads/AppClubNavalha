@@ -99,7 +99,8 @@ export function useGamificationSettings() {
   const dates = calculateSeasonDates(seasonStartDate, seasonDurationMonths);
 
   return { 
-    thresholds, 
+    thresholds,
+    tierThresholds: thresholds,
     rewards, 
     seasonStartDate, 
     seasonDurationMonths, 

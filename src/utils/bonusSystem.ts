@@ -1,6 +1,6 @@
 import { doc, getDoc, updateDoc, increment, addDoc, collection } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier } from './tierSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, getActiveThresholds } from './tierSystem';
 import { ClientBonus } from '../types';
 
 /**
@@ -127,7 +127,7 @@ export async function checkAndSyncClientRankBonuses(
 
   const { toAddBonuses, pointsToAdd } = getEligibleRankBonuses(
     clientData,
-    activeThresholds || DEFAULT_THRESHOLDS
+    activeThresholds || getActiveThresholds()
   );
 
   if (toAddBonuses.length === 0 && pointsToAdd === 0) {

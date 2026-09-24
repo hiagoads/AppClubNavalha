@@ -6,7 +6,7 @@ import {
   Gamepad2, Scissors, Edit2, Save, Trash2, Sparkles, RefreshCw, Calendar, Crown, Zap, 
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, History, AlertTriangle, ShieldAlert, FileText, ArrowUpRight, ArrowDownRight, ExternalLink 
 } from 'lucide-react';
-import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking } from '../utils/tierSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking, setActiveThresholds } from '../utils/tierSystem';
 import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG } from '../utils/bonusSystem';
 import { DEFAULT_REWARDS, RewardItem, calculateSeasonDates } from '../hooks/useGamificationSettings';
 import toast from 'react-hot-toast';
@@ -120,7 +120,10 @@ export function GamificationManager() {
           setSeasonStart(data.seasonStartDate || '');
           setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
           if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
-          if (data.tierThresholds) setTierThresholds(data.tierThresholds);
+          if (data.tierThresholds) {
+            setTierThresholds(data.tierThresholds);
+            setActiveThresholds(data.tierThresholds);
+          }
           if (data.rewards && Array.isArray(data.rewards)) setRewards(data.rewards);
         }
       } catch (e: any) {
@@ -151,6 +154,9 @@ export function GamificationManager() {
   const handleSaveSeason = async () => {
     setIsSavingSeason(true);
     try {
+      // Atualiza o cache em memória imediatamente em todo o sistema
+      setActiveThresholds(tierThresholds);
+
       await setDoc(doc(db, 'settings', 'gamification'), {
         seasonStartDate: seasonStart,
         seasonDurationMonths: parseInt(seasonDuration),
@@ -158,7 +164,7 @@ export function GamificationManager() {
         tierThresholds
       }, { merge: true });
 
-      // Atualiza também os clientes existentes cujas patentes salvas estejam desalinhadas com os novos limites
+      // Atualiza também todos os clientes existentes cujas patentes salvas estejam desalinhadas com os novos limites
       try {
         const snap = await getDocs(collection(db, 'clients'));
         for (const d of snap.docs) {
@@ -170,12 +176,13 @@ export function GamificationManager() {
             clientData.seasonalPoints ?? 0,
             clientData.points ?? 0
           );
+          // Recalcula a patente exata com as novas regras definidas pelo admin
           const calculatedTier = getLevelTier(peak, tierThresholds, 1);
-          // Se a patente salva estava maior que a pontuação real permite pelas novas regras
-          if (clientData.seasonHighestTierLevel && clientData.seasonHighestTierLevel > calculatedTier.tierLevel) {
+          if (clientData.seasonHighestTierLevel !== calculatedTier.tierLevel || clientData.highestTierLevel !== calculatedTier.tierLevel) {
             await updateDoc(doc(db, 'clients', d.id), {
               seasonHighestTierLevel: calculatedTier.tierLevel,
-              highestTierLevel: calculatedTier.tierLevel
+              highestTierLevel: calculatedTier.tierLevel,
+              level: calculatedTier.tierLevel
             });
           }
         }
