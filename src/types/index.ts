@@ -76,6 +76,7 @@ export interface Booking {
   notifiedLost?: boolean;
   notifiedCompleted?: boolean;
   pushSubscription?: any;
+  pausedGameSession?: VipPausedSession | null;
 }
 
 export interface ClientStats {
@@ -116,6 +117,20 @@ export interface PastSeason {
   endDate: string;
   totalParticipants: number;
   totalSeasonalPoints: number;
+  topPodium: SeasonPodiumMember[];
+  ranking?: SeasonPodiumMember[];
+  createdAt: string;
+}
+
+export interface PastWeek {
+  id: string;
+  weekNumber: number;
+  title: string;
+  startDate?: string;
+  endDate: string;
+  closedAt: string;
+  totalParticipants: number;
+  totalWeeklyPoints: number;
   topPodium: SeasonPodiumMember[];
   ranking?: SeasonPodiumMember[];
   createdAt: string;
@@ -204,3 +219,29 @@ export interface PointTransaction {
   bookingId?: string;
   createdAt: string;
 }
+
+export interface VipPausedSession {
+  id: string;
+  stationId: string;
+  stationName: string;
+  consoleModel: string;
+  consoleType?: VipConsoleType;
+  clientId?: string;
+  clientName: string;
+  clientWhatsapp?: string;
+  clientAvatar?: string;
+  remainingMinutes: number;
+  remainingMs?: number;
+  bonusTypeUsed?: 'vip_hours' | 'unlimited_vip' | 'courtesy' | 'manual';
+  bonusId?: string;
+  bookingId?: string;
+  barberId?: string;
+  pausedAt: string; // ISO string
+  status: 'paused' | 'resumed' | 'credited' | 'discarded';
+  resumedAt?: string;
+  resumedStationId?: string;
+  resumedStationName?: string;
+  creditedAt?: string;
+  creditBonusId?: string;
+}
+

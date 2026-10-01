@@ -12,10 +12,12 @@ import {
   getDocs,
   getDoc,
   setDoc,
+  where,
+  increment,
   serverTimestamp 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { VipStation, VipSessionHistory, VipConsoleType, VipStationStatus, VipActiveSession } from '../types';
+import { VipStation, VipSessionHistory, VipConsoleType, VipStationStatus, VipActiveSession, VipPausedSession, ClientBonus } from '../types';
 import toast from 'react-hot-toast';
 
 export const INITIAL_STATIONS: Omit<VipStation, 'id'>[] = [
@@ -69,6 +71,7 @@ export const INITIAL_STATIONS: Omit<VipStation, 'id'>[] = [
 export function useVipRoom() {
   const [stations, setStations] = useState<VipStation[]>([]);
   const [recentHistory, setRecentHistory] = useState<VipSessionHistory[]>([]);
+  const [pausedSessions, setPausedSessions] = useState<VipPausedSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSeeding, setIsSeeding] = useState(false);
 
@@ -121,6 +124,29 @@ export function useVipRoom() {
       setRecentHistory(historyList);
     }, (err) => {
       console.warn("Erro ao carregar histórico VIP:", err);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 3. Ouvir sessões pausadas pendentes (jogadores com tempo guardado/pausado para corte)
+  useEffect(() => {
+    const pausedQuery = query(
+      collection(db, 'vip_paused_sessions'),
+      orderBy('pausedAt', 'desc'),
+      limit(30)
+    );
+    const unsubscribe = onSnapshot(pausedQuery, (snapshot) => {
+      const list: VipPausedSession[] = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (data.status === 'paused' || data.status === 'saved_for_later') {
+          list.push({ id: docSnap.id, ...data } as VipPausedSession);
+        }
+      });
+      setPausedSessions(list);
+    }, (err) => {
+      console.warn("Erro ao carregar sessões pausadas:", err);
     });
 
     return () => unsubscribe();
@@ -331,15 +357,249 @@ export function useVipRoom() {
     }
   };
 
+  // Pausar sessão para corte de cabelo e liberar o console para outro jogador
+  const pauseSessionForHaircut = async (
+    stationId: string,
+    bookingData: {
+      id: string;
+      barberId: string;
+      clientName: string;
+      clientWhatsapp?: string;
+      clientId?: string;
+    }
+  ): Promise<VipPausedSession | null> => {
+    try {
+      const station = stations.find(s => s.id === stationId);
+      if (!station || !station.currentSession) return null;
+
+      const session = station.currentSession;
+      const now = Date.now();
+      const end = new Date(session.endTime).getTime();
+      const remainingMs = end - now;
+      const remainingMinutes = Math.max(1, Math.ceil(remainingMs / (60 * 1000)));
+
+      if (remainingMs <= 0) {
+        // Já acabou o tempo da máquina
+        await updateDoc(doc(db, 'vip_stations', stationId), {
+          status: 'available',
+          currentSession: null,
+          updatedAt: new Date().toISOString()
+        });
+        return null;
+      }
+
+      const pausedSessionId = `pause_${stationId}_${Date.now()}`;
+      const pausedSession: VipPausedSession = {
+        id: pausedSessionId,
+        stationId: station.id,
+        stationName: station.name,
+        consoleModel: station.consoleModel,
+        consoleType: station.consoleType,
+        clientId: session.clientId || bookingData.clientId || '',
+        clientName: session.clientName || bookingData.clientName,
+        clientWhatsapp: session.clientWhatsapp || bookingData.clientWhatsapp || '',
+        clientAvatar: session.clientAvatar || '',
+        remainingMinutes,
+        remainingMs,
+        bonusTypeUsed: session.bonusTypeUsed || 'manual',
+        bonusId: session.bonusId || '',
+        bookingId: bookingData.id,
+        barberId: bookingData.barberId,
+        pausedAt: new Date().toISOString(),
+        status: 'paused'
+      };
+
+      // 1. Salvar na coleção vip_paused_sessions
+      await setDoc(doc(db, 'vip_paused_sessions', pausedSessionId), pausedSession);
+
+      // 2. Liberar a máquina imediatamente para o próximo jogador da fila
+      await updateDoc(doc(db, 'vip_stations', stationId), {
+        status: 'available',
+        currentSession: null,
+        updatedAt: new Date().toISOString()
+      });
+
+      // 3. Registrar no histórico que foi pausado para corte
+      try {
+        const start = new Date(session.startTime).getTime();
+        const playedDuration = Math.max(1, Math.round((now - start) / (60 * 1000)));
+        await addDoc(collection(db, 'vip_sessions'), {
+          stationId: station.id,
+          stationName: station.name,
+          consoleModel: station.consoleModel,
+          clientId: session.clientId || bookingData.clientId || '',
+          clientName: session.clientName || bookingData.clientName,
+          clientAvatar: session.clientAvatar || '',
+          clientWhatsapp: session.clientWhatsapp || bookingData.clientWhatsapp || '',
+          startTime: session.startTime,
+          endTime: new Date().toISOString(),
+          durationMinutes: playedDuration,
+          bonusTypeUsed: session.bonusTypeUsed || 'manual',
+          endedAt: new Date().toISOString(),
+          endedBy: 'Pausado para corte de cabelo'
+        });
+      } catch (hErr) {
+        console.warn("Erro ao registrar segmento no histórico:", hErr);
+      }
+
+      toast.success(
+        `🎮 Tempo de ${session.clientName} (${remainingMinutes} min) pausado! O console ${station.name} foi liberado para outro jogador.`,
+        { duration: 6000 }
+      );
+
+      return pausedSession;
+    } catch (e) {
+      console.error("Erro ao pausar sessão para corte:", e);
+      toast.error("Erro ao pausar tempo de jogo");
+      return null;
+    }
+  };
+
+  // Retomar sessão pausada em um console (mesmo ou outro console)
+  const resumePausedSession = async (
+    pausedSessionId: string,
+    targetStationId: string
+  ) => {
+    try {
+      const pausedDoc = await getDoc(doc(db, 'vip_paused_sessions', pausedSessionId));
+      if (!pausedDoc.exists()) {
+        toast.error("Sessão pausada não encontrada");
+        return;
+      }
+      const pausedData = { id: pausedDoc.id, ...pausedDoc.data() } as VipPausedSession;
+
+      const targetStation = stations.find(s => s.id === targetStationId);
+      if (!targetStation) {
+        toast.error("Estação de destino não encontrada");
+        return;
+      }
+      if (targetStation.status === 'occupied') {
+        toast.error(`A estação ${targetStation.name} está ocupada no momento. Selecione outra estação livre.`);
+        return;
+      }
+
+      // Inicia a sessão na estação com os minutos restantes
+      await startSession(targetStationId, {
+        clientId: pausedData.clientId || '',
+        clientName: pausedData.clientName,
+        clientAvatar: pausedData.clientAvatar || '',
+        clientWhatsapp: pausedData.clientWhatsapp || '',
+        totalMinutes: pausedData.remainingMinutes,
+        bonusTypeUsed: pausedData.bonusTypeUsed || 'manual',
+        bonusId: pausedData.bonusId || '',
+        hoursToDeduct: 0 // Continuação do tempo já concedido
+      });
+
+      // Atualiza a sessão pausada para retomada
+      await updateDoc(doc(db, 'vip_paused_sessions', pausedSessionId), {
+        status: 'resumed',
+        resumedAt: new Date().toISOString(),
+        resumedStationId: targetStationId,
+        resumedStationName: targetStation.name
+      });
+
+      toast.success(`🎮 ${pausedData.clientName} direcionado para ${targetStation.name} com ${pausedData.remainingMinutes} min restantes!`);
+    } catch (e) {
+      console.error("Erro ao retomar sessão pausada:", e);
+      toast.error("Erro ao retomar partida");
+    }
+  };
+
+  // Guardar tempo restante na conta do cliente para outro dia
+  const creditPausedSessionToClient = async (
+    pausedSessionId: string,
+    customHours?: number
+  ) => {
+    try {
+      const pausedDoc = await getDoc(doc(db, 'vip_paused_sessions', pausedSessionId));
+      if (!pausedDoc.exists()) {
+        toast.error("Sessão pausada não encontrada");
+        return;
+      }
+      const pausedData = { id: pausedDoc.id, ...pausedDoc.data() } as VipPausedSession;
+
+      const hours = customHours || Math.max(1, Math.ceil(pausedData.remainingMinutes / 60));
+      let clientTargetId = pausedData.clientId;
+
+      // Se não tem clientId direto, tentar buscar por WhatsApp
+      if (!clientTargetId && pausedData.clientWhatsapp) {
+        const cleanPhone = pausedData.clientWhatsapp.replace(/\D/g, '');
+        if (cleanPhone) {
+          const q = query(collection(db, 'clients'), where('whatsapp', '==', cleanPhone));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            clientTargetId = snap.docs[0].id;
+          }
+        }
+      }
+
+      let bonusId = '';
+      if (clientTargetId) {
+        const clientRef = doc(db, 'clients', clientTargetId);
+        const clientSnap = await getDoc(clientRef);
+        if (clientSnap.exists()) {
+          const cData = clientSnap.data();
+          const existingBonuses = cData.bonuses || [];
+          bonusId = `bonus_saved_${Date.now()}`;
+          const newBonus: ClientBonus = {
+            id: bonusId,
+            title: `Tempo de Sala VIP Guardado (${pausedData.remainingMinutes} min)`,
+            type: 'vip_hours',
+            category: 'special',
+            totalHours: hours,
+            usedHours: 0,
+            isRedeemed: false,
+            createdAt: new Date().toISOString()
+          };
+
+          await updateDoc(clientRef, {
+            bonuses: [...existingBonuses, newBonus],
+            savedGameMinutes: increment(pausedData.remainingMinutes)
+          });
+        }
+      }
+
+      // Atualiza a sessão pausada para creditada / guardada
+      await updateDoc(doc(db, 'vip_paused_sessions', pausedSessionId), {
+        status: 'credited',
+        creditedAt: new Date().toISOString(),
+        creditBonusId: bonusId
+      });
+
+      toast.success(`💾 Tempo de jogo (${pausedData.remainingMinutes} min) guardado na conta de ${pausedData.clientName} para usar em outro dia!`);
+    } catch (e) {
+      console.error("Erro ao guardar tempo:", e);
+      toast.error("Erro ao guardar tempo na conta");
+    }
+  };
+
+  const discardPausedSession = async (pausedSessionId: string) => {
+    try {
+      await updateDoc(doc(db, 'vip_paused_sessions', pausedSessionId), {
+        status: 'discarded',
+        discardedAt: new Date().toISOString()
+      });
+      toast.success("Sessão pausada descartada.");
+    } catch (e) {
+      console.error(e);
+      toast.error("Erro ao descartar sessão");
+    }
+  };
+
   return {
     stations,
     recentHistory,
+    pausedSessions,
     loading,
     addStation,
     updateStation,
     deleteStation,
     startSession,
     addTimeToSession,
-    endSession
+    endSession,
+    pauseSessionForHaircut,
+    resumePausedSession,
+    creditPausedSessionToClient,
+    discardPausedSession
   };
 }

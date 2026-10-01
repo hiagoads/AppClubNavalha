@@ -12,9 +12,9 @@ import {
   Zap,
   Flame
 } from 'lucide-react';
-import { collection, query, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, getDocs, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { VipStation, ClientProfile, ClientBonus } from '../../types';
+import { VipStation, ClientProfile, ClientBonus, VipPausedSession } from '../../types';
 import { isBonusExpired } from '../../utils/bonusSystem';
 import toast from 'react-hot-toast';
 
@@ -44,13 +44,15 @@ export function StartSessionModal({
   const [loadingClients, setLoadingClients] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState<ClientProfile | null>(null);
+  const [pausedSessions, setPausedSessions] = useState<VipPausedSession[]>([]);
+  const [selectedPausedSession, setSelectedPausedSession] = useState<VipPausedSession | null>(null);
 
   const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [customMinutes, setCustomMinutes] = useState<string>('');
   const [sessionType, setSessionType] = useState<'vip_hours' | 'unlimited_vip' | 'courtesy' | 'manual'>('manual');
   const [selectedBonus, setSelectedBonus] = useState<ClientBonus | null>(null);
 
-  // Carregar clientes do banco
+  // Carregar clientes do banco e sessões pausadas
   useEffect(() => {
     if (!isOpen) return;
 
@@ -64,6 +66,18 @@ export function StartSessionModal({
           list.push({ id: d.id, ...d.data() } as ClientProfile);
         });
         setClients(list);
+
+        // Buscar sessões pausadas
+        const pq = query(collection(db, 'vip_paused_sessions'), orderBy('pausedAt', 'desc'), limit(20));
+        const psnap = await getDocs(pq);
+        const plist: VipPausedSession[] = [];
+        psnap.forEach(d => {
+          const pdata = d.data();
+          if (pdata.status === 'paused' || pdata.status === 'saved_for_later') {
+            plist.push({ id: d.id, ...pdata } as VipPausedSession);
+          }
+        });
+        setPausedSessions(plist);
       } catch (e) {
         console.error("Erro ao buscar clientes:", e);
       } finally {
@@ -73,6 +87,28 @@ export function StartSessionModal({
 
     fetchClients();
   }, [isOpen]);
+
+  const handleSelectPausedPlayer = (ps: VipPausedSession) => {
+    setSelectedPausedSession(ps);
+    setDurationMinutes(ps.remainingMinutes);
+    setCustomMinutes(String(ps.remainingMinutes));
+    setSessionType(ps.bonusTypeUsed || 'manual');
+
+    const found = clients.find(c => c.id === ps.clientId || (c.whatsapp && ps.clientWhatsapp && c.whatsapp.replace(/\D/g, '') === ps.clientWhatsapp.replace(/\D/g, '')));
+    if (found) {
+      setSelectedClient(found);
+    } else {
+      setSelectedClient({
+        id: ps.clientId || '',
+        username: ps.clientName,
+        firstName: ps.clientName,
+        email: '',
+        whatsapp: ps.clientWhatsapp || '',
+        points: 0,
+        createdAt: new Date().toISOString()
+      } as ClientProfile);
+    }
+  };
 
   // Ao selecionar um cliente, verificar se ele tem bônus de Horas VIP ou Ilimitado
   useEffect(() => {
@@ -154,6 +190,15 @@ export function StartSessionModal({
       hoursToDeduct: sessionType === 'vip_hours' ? hoursToDeduct : 0
     });
 
+    if (selectedPausedSession) {
+      updateDoc(doc(db, 'vip_paused_sessions', selectedPausedSession.id), {
+        status: 'resumed',
+        resumedAt: new Date().toISOString(),
+        resumedStationId: station.id,
+        resumedStationName: station.name
+      }).catch(console.error);
+    }
+
     onClose();
   };
 
@@ -190,13 +235,44 @@ export function StartSessionModal({
               {selectedClient && (
                 <button
                   type="button"
-                  onClick={() => setSelectedClient(null)}
+                  onClick={() => {
+                    setSelectedClient(null);
+                    setSelectedPausedSession(null);
+                  }}
                   className="text-gold text-[11px] hover:underline"
                 >
                   Trocar Cliente
                 </button>
               )}
             </label>
+
+            {/* Quick banner for players with paused time from haircut */}
+            {pausedSessions.length > 0 && !selectedClient && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                  <Clock className="w-3.5 h-3.5 animate-pulse" />
+                  <span>Retomar jogador com tempo pausado do corte ({pausedSessions.length}):</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {pausedSessions.map(ps => (
+                    <button
+                      key={ps.id}
+                      type="button"
+                      onClick={() => handleSelectPausedPlayer(ps)}
+                      className="bg-carbon border border-amber-500/40 hover:border-amber-400 p-2 rounded-lg text-left text-xs transition-all flex items-center gap-2 group"
+                    >
+                      <div className="w-6 h-6 rounded-md bg-amber-500/20 flex items-center justify-center text-amber-400 text-[10px] font-bold">
+                        🎮
+                      </div>
+                      <div>
+                        <p className="font-bold text-white group-hover:text-amber-300">{ps.clientName}</p>
+                        <p className="text-[10px] text-white/50">{ps.remainingMinutes} min restantes</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {!selectedClient ? (
               <div className="space-y-2">

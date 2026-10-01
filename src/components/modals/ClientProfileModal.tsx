@@ -366,7 +366,7 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
                 <h3 className="text-xs uppercase tracking-widest text-gold font-bold">Bônus por Nível</h3>
               </div>
               <p className="text-[11px] text-white/60 leading-relaxed">
-                Ao atingir a pontuação de cada rank (Prata: 1h VIP, Ouro: 1h VIP + 5.000 pts, Platina: 3h VIP, Diamante+: 50% OFF), seus bônus serão liberados aqui automaticamente para uso!
+                Ao atingir a pontuação de cada rank (Bronze: 1 Picolé Grátis, Prata: 1h VIP, Ouro: 1h VIP + 5.000 pts, Platina: 3h VIP, Diamante+: 50% OFF), seus bônus serão liberados aqui automaticamente para uso!
               </p>
             </div>
           )}

@@ -15,7 +15,8 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useVipRoom } from '../../hooks/useVipRoom';
-import { VipStation, VipConsoleType } from '../../types';
+import { VipStation, VipConsoleType, VipPausedSession } from '../../types';
+import { PausedGameResolutionModal } from '../modals/PausedGameResolutionModal';
 
 interface VipQueueQuickBarProps {
   onGoToVipRoom: () => void;
@@ -248,17 +249,29 @@ function ActiveStationQuickCard({
 }
 
 export function VipQueueQuickBar({ onGoToVipRoom }: VipQueueQuickBarProps) {
-  const { stations, loading, addTimeToSession, endSession } = useVipRoom();
+  const { 
+    stations, 
+    pausedSessions, 
+    loading, 
+    addTimeToSession, 
+    endSession, 
+    resumePausedSession, 
+    creditPausedSessionToClient, 
+    discardPausedSession 
+  } = useVipRoom();
+
+  const [resolvingSession, setResolvingSession] = useState<VipPausedSession | null>(null);
 
   const occupiedStations = stations.filter(
     s => s.status === 'occupied' && s.currentSession
   );
   const availableCount = stations.filter(s => s.status === 'available').length;
+  const availableStations = stations.filter(s => s.status === 'available');
 
   if (loading) return null;
 
-  // Se ninguém estiver jogando: exibir barra informativa discreta e elegante
-  if (occupiedStations.length === 0) {
+  // Se ninguém estiver jogando e não houver sessões pausadas
+  if (occupiedStations.length === 0 && pausedSessions.length === 0) {
     return (
       <div className="mb-6 p-3 rounded-xl bg-carbon-light/60 border border-white/10 hover:border-gold/30 transition-all flex items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2.5">
@@ -284,51 +297,106 @@ export function VipQueueQuickBar({ onGoToVipRoom }: VipQueueQuickBarProps) {
     );
   }
 
-  // Se houver alguém jogando: exibir painel em destaque com os jogadores em tempo real
+  // Se houver alguém jogando ou com tempo pausado
   return (
-    <div className="mb-6 rounded-2xl border border-gold/40 bg-gradient-to-r from-carbon-light via-carbon to-carbon-light p-4 shadow-xl shadow-black/50 space-y-3.5 animate-in fade-in duration-300">
-      {/* Topo do Painel de Visualização Rápida */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold shadow-lg shadow-gold/20 shrink-0">
-            <Gamepad2 className="w-4 h-4 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-display font-bold text-sm text-white tracking-wide flex items-center gap-1.5">
-                Sala VIP • Partidas Ativas
-              </h3>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-gold text-carbon shadow-sm animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-carbon" />
-                {occupiedStations.length} em jogo
-              </span>
+    <>
+      <PausedGameResolutionModal
+        isOpen={!!resolvingSession}
+        pausedSession={resolvingSession}
+        availableStations={availableStations}
+        onClose={() => setResolvingSession(null)}
+        onResume={(psId, stId) => resumePausedSession(psId, stId)}
+        onCreditToAccount={(psId, hours) => creditPausedSessionToClient(psId, hours)}
+        onDiscard={(psId) => discardPausedSession(psId)}
+      />
+
+      <div className="mb-6 rounded-2xl border border-gold/40 bg-gradient-to-r from-carbon-light via-carbon to-carbon-light p-4 shadow-xl shadow-black/50 space-y-3.5 animate-in fade-in duration-300">
+        {/* Topo do Painel de Visualização Rápida */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold shadow-lg shadow-gold/20 shrink-0">
+              <Gamepad2 className="w-4 h-4 animate-pulse" />
             </div>
-            <p className="text-[11px] text-white/50">
-              Acompanhe o tempo de jogo e adicione minutos sem sair da gestão da fila.
-            </p>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-display font-bold text-sm text-white tracking-wide flex items-center gap-1.5">
+                  Sala VIP • Partidas & Créditos
+                </h3>
+                {occupiedStations.length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-gold text-carbon shadow-sm animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-carbon" />
+                    {occupiedStations.length} em jogo
+                  </span>
+                )}
+                {pausedSessions.length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm">
+                    <Clock className="w-2.5 h-2.5" />
+                    {pausedSessions.length} pausado{pausedSessions.length > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-white/50">
+                Acompanhe o tempo de jogo e direcione clientes pausados para os consoles livres.
+              </p>
+            </div>
           </div>
+
+          <button
+            onClick={onGoToVipRoom}
+            className="inline-flex items-center gap-1.5 bg-gold/15 hover:bg-gold/25 text-gold border border-gold/40 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 self-start sm:self-center"
+          >
+            <span>Gerenciar Sala VIP Completa</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        <button
-          onClick={onGoToVipRoom}
-          className="inline-flex items-center gap-1.5 bg-gold/15 hover:bg-gold/25 text-gold border border-gold/40 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 self-start sm:self-center"
-        >
-          <span>Gerenciar Sala VIP Completa</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </div>
+        {/* Jogadores com tempo pausado aguardando direcionamento */}
+        {pausedSessions.length > 0 && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span className="text-xs font-bold text-amber-300">
+                  Jogadores com Tempo Pausado ({pausedSessions.length})
+                </span>
+              </div>
+              <span className="text-[10px] text-white/50">Consoles liberados para outros clientes</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {pausedSessions.map(ps => (
+                <div key={ps.id} className="p-2.5 rounded-lg bg-black/40 border border-white/10 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white truncate">{ps.clientName}</p>
+                    <p className="text-[10px] text-white/50 truncate">
+                      {ps.remainingMinutes} min restantes • {ps.stationName}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setResolvingSession(ps)}
+                    className="px-2.5 py-1 text-[10px] font-bold bg-gold text-carbon hover:bg-gold-light rounded-md transition-colors shrink-0 uppercase"
+                  >
+                    Opções
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
-      {/* Grid com as Estações em Jogo */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {occupiedStations.map(st => (
-          <ActiveStationQuickCard
-            key={st.id}
-            station={st}
-            onAddMinutes={(stId, mins) => addTimeToSession(stId, mins)}
-            onEndSession={(stId) => endSession(stId)}
-          />
-        ))}
+        {/* Grid com as Estações em Jogo */}
+        {occupiedStations.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {occupiedStations.map(st => (
+              <ActiveStationQuickCard
+                key={st.id}
+                station={st}
+                onAddMinutes={(stId, mins) => addTimeToSession(stId, mins)}
+                onEndSession={(stId) => endSession(stId)}
+              />
+            ))}
+          </div>
+        )}
       </div>
-    </div>
+    </>
   );
 }

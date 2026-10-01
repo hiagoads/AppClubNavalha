@@ -22,6 +22,7 @@ import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDoc } 
 import { db } from '../../lib/firebase';
 import { PointTransaction } from '../../types';
 import { DEFAULT_THRESHOLDS, getLevelTier, getTierName, getTierTheme, getClientTier } from '../../utils/tierSystem';
+import { checkAndSyncClientRankBonuses } from '../../utils/bonusSystem';
 import { useGamificationSettings } from '../../hooks/useGamificationSettings';
 import toast from 'react-hot-toast';
 
@@ -221,6 +222,14 @@ export function ClientPointsAuditModal({
       };
       if (onClientUpdated) onClientUpdated(updated);
 
+      if (adjAction === 'add') {
+        const bonusRes = await checkAndSyncClientRankBonuses(client.id, updated, thresholds);
+        if (bonusRes && bonusRes.awardedBonuses && bonusRes.awardedBonuses.length > 0) {
+          const titles = bonusRes.awardedBonuses.map(b => b.title).join(', ');
+          toast.success(`🎉 Bônus de patente concedido: ${titles}`, { duration: 5000 });
+        }
+      }
+
       toast.success(`${pts} pontos ${adjAction === 'add' ? 'creditados' : 'debitados'} com sucesso!`);
       setAdjPoints('');
       setAdjReason('');
@@ -291,6 +300,12 @@ export function ClientPointsAuditModal({
         ...updatePayload
       };
       if (onClientUpdated) onClientUpdated(updated);
+
+      const bonusRes = await checkAndSyncClientRankBonuses(client.id, updated, thresholds);
+      if (bonusRes && bonusRes.awardedBonuses && bonusRes.awardedBonuses.length > 0) {
+        const titles = bonusRes.awardedBonuses.map(b => b.title).join(', ');
+        toast.success(`🎉 Bônus da nova patente concedido: ${titles}`, { duration: 5000 });
+      }
 
       toast.success(`Patente de ${client.username} alterada para ${targetTierName} com sucesso!`);
       setTierOverrideReason('');

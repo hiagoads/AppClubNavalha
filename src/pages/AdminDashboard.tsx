@@ -38,11 +38,13 @@ import {
   History,
   AlertTriangle,
   ArrowLeft,
-  Sparkles
+  Sparkles,
+  Gamepad2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { useHistory } from '../hooks/useHistory';
+import { useVipRoom } from '../hooks/useVipRoom';
 import { HistoryView } from '../components/HistoryView';
 import { GamificationManager } from '../components/GamificationManager';
 import { VipRoomManager } from '../components/VipRoomManager';
@@ -54,6 +56,7 @@ import { CallingBookingModal } from '../components/modals/CallingBookingModal';
 import { CancelingBookingModal } from '../components/modals/CancelingBookingModal';
 import { CompletingBookingModal } from '../components/modals/CompletingBookingModal';
 import { EditServicesModal } from '../components/modals/EditServicesModal';
+import { PausedGameResolutionModal } from '../components/modals/PausedGameResolutionModal';
 
 import { useBarbers } from '../hooks/useBarbers';
 import { useProcessing } from '../hooks/useProcessing';
@@ -70,6 +73,17 @@ export default function AdminDashboard() {
   const { isProcessing, withProcessing } = useProcessing();
   const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes } = queueTimers;
   useNotifications(queue, activeBookings[0] || null);
+
+  const {
+    stations,
+    pausedSessions,
+    pauseSessionForHaircut,
+    resumePausedSession,
+    creditPausedSessionToClient,
+    discardPausedSession
+  } = useVipRoom();
+
+  const [resolvingPausedSession, setResolvingPausedSession] = useState<any>(null);
 
   const getServicePrice = (s: any) => {
     return parsePrice(s.promoPrice) > 0 ? parsePrice(s.promoPrice) : parsePrice(s.price);
@@ -195,13 +209,57 @@ export default function AdminDashboard() {
   const startService = async (bookingId: string, assignedBarberId: string) => {
     const bookingToUpdate = queue.find(b => b.id === bookingId) || activeBookings.find(b => b.id === bookingId);
     try {
+      // Verificar se este jogador está com sessão ativa em algum console da Sala VIP
+      let pausedSessionData: any = null;
+      if (bookingToUpdate) {
+        const cleanBookingPhone = (bookingToUpdate.clientWhatsapp || '').replace(/\D/g, '');
+        const bookingName = (bookingToUpdate.clientName || '').trim().toLowerCase();
+
+        const activeStation = stations.find(s => {
+          if (s.status !== 'occupied' || !s.currentSession) return false;
+          const sess = s.currentSession;
+          // Match 1: clientId idêntico
+          if (sess.clientId && bookingToUpdate.clientId && sess.clientId === bookingToUpdate.clientId) {
+            return true;
+          }
+          // Match 2: telefone whatsapp idêntico
+          if (sess.clientWhatsapp && cleanBookingPhone) {
+            const cleanSessPhone = sess.clientWhatsapp.replace(/\D/g, '');
+            if (cleanSessPhone && cleanSessPhone === cleanBookingPhone) return true;
+          }
+          // Match 3: nome do cliente idêntico
+          if (sess.clientName && bookingName) {
+            const sessName = sess.clientName.trim().toLowerCase();
+            if (sessName === bookingName) return true;
+          }
+          return false;
+        });
+
+        if (activeStation) {
+          // Pausa automaticamente o tempo de jogo e libera a máquina imediatamente para outro jogador
+          pausedSessionData = await pauseSessionForHaircut(activeStation.id, {
+            id: bookingId,
+            barberId: assignedBarberId,
+            clientName: bookingToUpdate.clientName,
+            clientWhatsapp: bookingToUpdate.clientWhatsapp,
+            clientId: bookingToUpdate.clientId
+          });
+        }
+      }
+
       const bookingRef = doc(db, 'bookings', bookingId);
-      await updateDoc(bookingRef, {
+      const updateData: any = {
         status: BookingStatus.IN_SERVICE,
         serviceStartTime: serverTimestamp(),
         barberId: assignedBarberId,
         originalBarberId: bookingToUpdate?.originalBarberId || bookingToUpdate?.barberId || 'any'
-      });
+      };
+
+      if (pausedSessionData) {
+        updateData.pausedGameSession = pausedSessionData;
+      }
+
+      await updateDoc(bookingRef, updateData);
       toast.success('Serviço iniciado');
     } catch (err) {
       toast.error('Erro ao iniciar serviço');
@@ -433,9 +491,13 @@ export default function AdminDashboard() {
             lifetimePoints: newLifetime,
             level: updatedTier.level
           };
-          await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient);
+          const rankBonusResult = await checkAndSyncClientRankBonuses(clientDoc.id, updatedClient, thresholds);
           
           toast.success(`${pointsToGive} pontos de serviços creditados para ${clientData.username || clientData.firstName || 'o cliente'}!`);
+          if (rankBonusResult && rankBonusResult.awardedBonuses && rankBonusResult.awardedBonuses.length > 0) {
+            const bonusTitles = rankBonusResult.awardedBonuses.map(b => b.title).join(', ');
+            toast.success(`🎉 Subiu de Patente! Bônus concedido: ${bonusTitles}`, { duration: 6000 });
+          }
         } catch (e) {
           console.error("Error giving points:", e);
         }
@@ -470,9 +532,22 @@ export default function AdminDashboard() {
         }
       }
 
+      // Check if this booking had a paused game session in Sala VIP
+      const pausedForThisBooking = activeInfo?.pausedGameSession || pausedSessions.find(ps => 
+        (ps.status === 'paused' || ps.status === 'saved_for_later') && (
+          (ps.bookingId && ps.bookingId === completingBooking.id) ||
+          (ps.clientId && activeInfo?.clientId && ps.clientId === activeInfo.clientId) ||
+          (ps.clientWhatsapp && activeInfo?.clientWhatsapp && ps.clientWhatsapp.replace(/\D/g, '') === activeInfo.clientWhatsapp.replace(/\D/g, ''))
+        )
+      );
+
       toast.success('Serviço concluído!');
       setCompletingBooking(null);
       setCompletionBarberId('');
+
+      if (pausedForThisBooking) {
+        setResolvingPausedSession(pausedForThisBooking);
+      }
     } catch (err) {
       toast.error('Erro ao concluir');
     }
@@ -924,6 +999,16 @@ export default function AdminDashboard() {
         onSubmit={withProcessing(handleUpdateServices)}
       />
 
+      <PausedGameResolutionModal
+        isOpen={!!resolvingPausedSession}
+        pausedSession={resolvingPausedSession}
+        availableStations={stations.filter(s => s.status === 'available')}
+        onClose={() => setResolvingPausedSession(null)}
+        onResume={(psId, stId) => resumePausedSession(psId, stId)}
+        onCreditToAccount={(psId, hours) => creditPausedSessionToClient(psId, hours)}
+        onDiscard={(psId) => discardPausedSession(psId)}
+      />
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Active Booking Column */}
               <div className="lg:col-span-1 flex flex-col gap-6">
@@ -978,6 +1063,27 @@ export default function AdminDashboard() {
                                   ) : activeB.serviceStartTime ? `Restam aprox. ${formatTime(activeRemainingMinutes[activeB.id] || 0)}` : "Iniciando..."}
                                 </p>
                               </div>
+
+                              {activeB.pausedGameSession && (
+                                <div className="mt-2.5 p-2 rounded-xl bg-gold/10 border border-gold/30 flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <Gamepad2 className="w-3.5 h-3.5 text-gold shrink-0 animate-pulse" />
+                                    <div className="min-w-0">
+                                      <p className="text-[10px] font-bold text-gold truncate">Jogo Pausado para o Corte</p>
+                                      <p className="text-[9px] text-white/60 truncate">
+                                        Console liberado • {activeB.pausedGameSession.remainingMinutes} min restantes
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setResolvingPausedSession(activeB.pausedGameSession)}
+                                    className="px-2 py-0.5 text-[9px] font-bold bg-gold text-carbon rounded-md hover:bg-gold-light transition-colors shrink-0 uppercase"
+                                  >
+                                    Opções
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -1087,6 +1193,31 @@ export default function AdminDashboard() {
                                 Clube Navalha
                               </span>
                             )}
+                            {(() => {
+                              const cleanItemPhone = (item.clientWhatsapp || '').replace(/\D/g, '');
+                              const itemLower = (item.clientName || '').trim().toLowerCase();
+                              const playingStation = stations.find(s => {
+                                if (s.status !== 'occupied' || !s.currentSession) return false;
+                                const sess = s.currentSession;
+                                if (sess.clientId && item.clientId && sess.clientId === item.clientId) return true;
+                                const cleanSessPhone = (sess.clientWhatsapp || '').replace(/\D/g, '');
+                                if (cleanSessPhone && cleanItemPhone && cleanSessPhone === cleanItemPhone) return true;
+                                if (sess.clientName && itemLower && sess.clientName.trim().toLowerCase() === itemLower) return true;
+                                return false;
+                              });
+
+                              if (!playingStation) return null;
+
+                              return (
+                                <span 
+                                  className="inline-flex items-center gap-1 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0 animate-pulse" 
+                                  title="Jogador atualmente jogando no console. Ao chamar para cortar o cabelo, seu tempo será pausado automaticamente e o console liberado para outro jogador."
+                                >
+                                  <Gamepad2 className="w-2.5 h-2.5" />
+                                  Jogando: {playingStation.name}
+                                </span>
+                              );
+                            })()}
                             <span className="flex items-center text-white/50 text-xs sm:text-sm max-w-[150px] sm:max-w-xs">
                               <span className="truncate">{item.serviceId}</span>
                               <button onClick={() => setEditingServicesBooking({id: item.id, serviceId: item.serviceId, expectedPrice: item.expectedPrice})} className="text-white/40 hover:text-white shrink-0 ml-1 p-1">

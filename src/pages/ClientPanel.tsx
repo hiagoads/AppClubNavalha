@@ -5,7 +5,7 @@ import { useQueueTimers } from '../hooks/useQueueTimers';
 import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle, Check, Coffee, Sparkles, CalendarClock } from 'lucide-react';
+import { Scissors, Clock, Users, ChevronRight, User, Phone, CheckCircle2, Menu, LogIn, X, Edit2, MapPin, AlertTriangle, Check, Coffee, Sparkles, CalendarClock, Gamepad2, Trophy, Crown } from 'lucide-react';
 import { BookingStatus, BookingType, Service } from '../types';
 import { getDoc, addDoc, collection, doc, updateDoc, serverTimestamp, query, onSnapshot, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -21,6 +21,8 @@ export const getServicePrice = (s: any) => {
 };
 
 import { useBarbers } from '../hooks/useBarbers';
+import { useVipRoom } from '../hooks/useVipRoom';
+import { ClientActiveGameCard } from '../components/vip/ClientActiveGameCard';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { ClientMenuModal } from '../components/modals/ClientMenuModal';
 import { JoinQueueModal } from '../components/modals/JoinQueueModal';
@@ -28,6 +30,7 @@ import { EditClientServicesModal } from '../components/modals/EditClientServices
 import { ReceiptModal } from '../components/modals/ReceiptModal';
 import { ClientProfileModal } from '../components/modals/ClientProfileModal';
 import { getLevelTier, getClientTier } from '../utils/tierSystem';
+import { checkAndSyncClientRankBonuses } from '../utils/bonusSystem';
 import { useGamificationSettings } from '../hooks/useGamificationSettings';
 import { EditClientProfileModal } from '../components/modals/EditClientProfileModal';
 import { RankingModal } from '../components/modals/RankingModal';
@@ -76,7 +79,13 @@ export default function ClientPanel() {
   const { isOpen, schedulingFee, scheduleHours } = useSettings();
   const { activeRemainingMinutes, queueWaitTimes, sortedQueue, queueIntervals, allOccupiedIntervals } = useQueueTimers(activeBookings, queue, services, breaks, barbers);
 
-  
+  // Sincroniza bônus de patente pendentes automaticamente quando o cliente acessa o painel
+  useEffect(() => {
+    if (clientProfile?.id) {
+      checkAndSyncClientRankBonuses(clientProfile.id, clientProfile, thresholds);
+    }
+  }, [clientProfile?.id, clientProfile?.points, clientProfile?.seasonalPoints, clientProfile?.seasonHighestTierLevel]);
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -403,6 +412,31 @@ export default function ClientPanel() {
   const myPosition = myBooking ? sortedQueue?.findIndex(b => b.id === myBookingId) + 1 : -1;
   const myWaitTime = myBookingId ? (queueWaitTimes[myBookingId] || 0) : 0;
 
+  const { stations, pausedSessions } = useVipRoom();
+
+  const myActiveStation = stations.find(s => {
+    if (s.status !== 'occupied' || !s.currentSession) return false;
+    const sess = s.currentSession;
+    if (user && clientProfile && sess.clientId === clientProfile.id) return true;
+    const myPhone = (clientProfile?.whatsapp || myBooking?.clientWhatsapp || '').replace(/\D/g, '');
+    const sessPhone = (sess.clientWhatsapp || '').replace(/\D/g, '');
+    if (myPhone && sessPhone && myPhone === sessPhone) return true;
+    if (clientProfile?.username && sess.clientName.trim().toLowerCase() === clientProfile.username.trim().toLowerCase()) return true;
+    if (myBooking?.clientName && sess.clientName.trim().toLowerCase() === myBooking.clientName.trim().toLowerCase()) return true;
+    return false;
+  });
+
+  const myPausedSession = pausedSessions.find(ps => {
+    if (user && clientProfile && ps.clientId === clientProfile.id) return true;
+    const myPhone = (clientProfile?.whatsapp || myBooking?.clientWhatsapp || '').replace(/\D/g, '');
+    const psPhone = (ps.clientWhatsapp || '').replace(/\D/g, '');
+    if (myPhone && psPhone && myPhone === psPhone) return true;
+    if (myBooking && ps.bookingId === myBooking.id) return true;
+    if (clientProfile?.username && ps.clientName.trim().toLowerCase() === clientProfile.username.trim().toLowerCase()) return true;
+    if (myBooking?.clientName && ps.clientName.trim().toLowerCase() === myBooking.clientName.trim().toLowerCase()) return true;
+    return false;
+  });
+
   const getBookingDate = (b: any) => {
     if (b.type === 'scheduled' && b.scheduledDate) {
       return b.scheduledDate;
@@ -556,6 +590,62 @@ export default function ClientPanel() {
             </div>
           </div>
         )})()}
+
+        {/* Botão de Acesso Rápido ao Ranking Semanal & Pódio Comprovado */}
+        <div className="mx-2 sm:mx-0">
+          <button
+            onClick={() => setShowRanking(true)}
+            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-gold/20 via-black/50 to-gold/10 border border-gold/30 hover:border-gold/60 text-left transition-all group shadow-lg shadow-black/40"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold group-hover:scale-105 transition-transform shrink-0">
+                <Trophy className="w-5 h-5 text-gold" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                  Ranking Semanal & Pódio <Crown className="w-3.5 h-3.5 text-gold" />
+                </p>
+                <p className="text-[10px] text-white/50 truncate">
+                  Acompanhe os líderes e comprove os ganhadores do pódio
+                </p>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-gold/70 group-hover:translate-x-0.5 transition-transform shrink-0 ml-2" />
+          </button>
+        </div>
+
+        {/* Active Game Card (se o cliente estiver jogando na Sala VIP) */}
+        {myActiveStation && (
+          <ClientActiveGameCard station={myActiveStation} />
+        )}
+
+        {/* Paused Game Card (se o tempo de jogo do cliente foi pausado para o corte de cabelo) */}
+        {myPausedSession && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 shadow-lg shadow-black/40 space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                  <Gamepad2 className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-amber-300 tracking-wider bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30">
+                    Jogo Pausado para o Corte
+                  </span>
+                  <h4 className="text-sm font-bold text-white mt-0.5">
+                    {myPausedSession.remainingMinutes} min guardados • <span className="text-white/60 font-normal">{myPausedSession.stationName}</span>
+                  </h4>
+                </div>
+              </div>
+              <div className="text-right shrink-0 bg-amber-500/15 px-2.5 py-1.5 rounded-xl border border-amber-500/30">
+                <p className="text-[9px] text-amber-200/60 uppercase font-bold">Tempo Salvo</p>
+                <p className="text-xl font-mono font-black text-amber-300">{myPausedSession.remainingMinutes}m</p>
+              </div>
+            </div>
+            <p className="text-xs text-white/70 pt-2 border-t border-white/10 leading-relaxed">
+              🎮 Seu tempo de jogo no console foi pausado automaticamente quando o barbeiro chamou sua vez para cortar o cabelo, e o console foi liberado para outro jogador. Ao finalizar o corte, o barbeiro poderá direcionar você para um console livre ou guardar seu tempo na sua conta para outro dia!
+            </p>
+          </div>
+        )}
 
         {/* Active Breaks Card (Intervalo / Pausa em tempo real) */}
         {activeBreaks && activeBreaks.length > 0 && (

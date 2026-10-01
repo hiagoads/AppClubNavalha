@@ -11,7 +11,7 @@ import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG } from '../utils/bon
 import { DEFAULT_REWARDS, RewardItem, calculateSeasonDates } from '../hooks/useGamificationSettings';
 import toast from 'react-hot-toast';
 import { compressImage } from '../utils/imageUtils';
-import { PastSeason, PointTransaction } from '../types';
+import { PastSeason, PastWeek, SeasonPodiumMember, PointTransaction } from '../types';
 import { ClientPointsAuditModal } from './modals/ClientPointsAuditModal';
 import { GlobalPointsAuditLog } from './gamification/GlobalPointsAuditLog';
 
@@ -55,9 +55,13 @@ export function GamificationManager() {
   const [isSavingSeason, setIsSavingSeason] = useState(false);
   const [isSyncingRankBonuses, setIsSyncingRankBonuses] = useState(false);
 
-  // Past Seasons State
+  // Past Seasons and Past Weeks State
   const [pastSeasons, setPastSeasons] = useState<PastSeason[]>([]);
   const [expandedSeasonAdmin, setExpandedSeasonAdmin] = useState<string | null>(null);
+  const [lastWeekPodium, setLastWeekPodium] = useState<SeasonPodiumMember[]>([]);
+  const [lastWeekClosedAt, setLastWeekClosedAt] = useState<string>('');
+  const [pastWeeks, setPastWeeks] = useState<PastWeek[]>([]);
+  const [expandedWeekAdmin, setExpandedWeekAdmin] = useState<string | null>(null);
 
   // Rewards State
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
@@ -120,6 +124,9 @@ export function GamificationManager() {
           setSeasonStart(data.seasonStartDate || '');
           setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
           if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
+          if (data.currentWeekNumber) setCurrentWeekNumber(Number(data.currentWeekNumber));
+          if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) setLastWeekPodium(data.lastWeekPodium);
+          if (data.lastWeekClosedAt) setLastWeekClosedAt(data.lastWeekClosedAt);
           if (data.tierThresholds) {
             setTierThresholds(data.tierThresholds);
             setActiveThresholds(data.tierThresholds);
@@ -143,11 +150,21 @@ export function GamificationManager() {
       if (err.code !== 'permission-denied') console.error('Error loading past seasons:', err);
     });
 
+    // Listen to past weeks
+    const qPastWeeks = query(collection(db, 'past_weeks'), orderBy('weekNumber', 'desc'));
+    const unsubPastWeeks = onSnapshot(qPastWeeks, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PastWeek));
+      setPastWeeks(data);
+    }, (err) => {
+      if (err.code !== 'permission-denied') console.error('Error loading past weeks:', err);
+    });
+
     return () => {
       unsubscribe();
       unsubClients();
       unsubTx();
       unsubPast();
+      unsubPastWeeks();
     };
   }, []);
 
@@ -176,15 +193,20 @@ export function GamificationManager() {
             clientData.seasonalPoints ?? 0,
             clientData.points ?? 0
           );
-          // Recalcula a patente exata com as novas regras definidas pelo admin
           const calculatedTier = getLevelTier(peak, tierThresholds, 1);
-          if (clientData.seasonHighestTierLevel !== calculatedTier.tierLevel || clientData.highestTierLevel !== calculatedTier.tierLevel) {
+          const newHighest = Math.max(clientData.seasonHighestTierLevel ?? 1, calculatedTier.tierLevel);
+          if (clientData.seasonHighestTierLevel !== newHighest || clientData.highestTierLevel !== newHighest) {
             await updateDoc(doc(db, 'clients', d.id), {
-              seasonHighestTierLevel: calculatedTier.tierLevel,
-              highestTierLevel: calculatedTier.tierLevel,
-              level: calculatedTier.tierLevel
+              seasonHighestTierLevel: newHighest,
+              highestTierLevel: newHighest,
+              level: newHighest
             });
           }
+          await checkAndSyncClientRankBonuses(d.id, {
+            ...clientData,
+            seasonHighestTierLevel: newHighest,
+            highestTierLevel: newHighest
+          }, tierThresholds);
         }
       } catch (clientErr) {
         console.warn('Erro ao atualizar patentes dos clientes com novos limites:', clientErr);
@@ -250,6 +272,42 @@ export function GamificationManager() {
       // O bônus fica disponível por exatamente 7 dias (até o próximo fechamento semanal no domingo seguinte)
       const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const createdAt = now.toISOString();
+
+      // 1. Capturar os ganhadores do pódio e ranking da semana ANTES de zerar a pontuação
+      const activeCompetitors = sortedClients.filter((c: any) => (c.weeklyPoints || 0) > 0);
+      const topCompetitors = activeCompetitors.length > 0 ? activeCompetitors : sortedClients;
+      const topThreeClients = topCompetitors.slice(0, 3);
+
+      const podiumMembers: SeasonPodiumMember[] = topThreeClients.map((c, idx) => {
+        const tier = getClientTier(c, tierThresholds);
+        const position = idx + 1;
+        let rewardDesc = 'Prêmio Semanal';
+        if (position === 1) rewardDesc = 'Acesso Livre VIP (1º da Semana)';
+        else if (position === 2) rewardDesc = '1h VIP + Picolé Grátis';
+        else if (position === 3) rewardDesc = 'Picolé Grátis';
+
+        return {
+          position,
+          username: c.username || c.firstName || `Ganhador ${position}`,
+          avatarUrl: c.avatarUrl || '',
+          points: c.weeklyPoints ?? c.points ?? 0,
+          reward: rewardDesc,
+          tierName: tier.name
+        };
+      });
+
+      const weeklyRankingSnapshot: SeasonPodiumMember[] = topCompetitors.slice(0, 25).map((c, idx) => {
+        const tier = getClientTier(c, tierThresholds);
+        return {
+          position: idx + 1,
+          username: c.username || c.firstName || `Competidor ${idx + 1}`,
+          avatarUrl: c.avatarUrl || '',
+          points: c.weeklyPoints ?? c.points ?? 0,
+          tierName: tier.name
+        };
+      });
+
+      const totalWeeklyPts = activeCompetitors.reduce((acc, c) => acc + (c.weeklyPoints || 0), 0);
 
       for (let i = 0; i < sortedClients.length; i++) {
         const c = sortedClients[i];
@@ -335,7 +393,33 @@ export function GamificationManager() {
         });
       }
 
-      toast.success(`Semana encerrada! Prêmios do pódio concedidos com validade de 1 semana e ranking reiniciado.`);
+      // 2. Salvar pódio e comprovação dos ganhadores em settings/gamification
+      const nextWeekNum = (currentWeekNumber || 1) + 1;
+      await setDoc(doc(db, 'settings', 'gamification'), {
+        lastWeekPodium: podiumMembers,
+        lastWeekRanking: weeklyRankingSnapshot,
+        lastWeekClosedAt: createdAt,
+        currentWeekNumber: nextWeekNum
+      }, { merge: true });
+
+      // 3. Arquivar semana na coleção past_weeks para comprovação permanente
+      await addDoc(collection(db, 'past_weeks'), {
+        weekNumber: currentWeekNumber || 1,
+        title: `Semana ${currentWeekNumber || 1}`,
+        endDate: now.toISOString().split('T')[0],
+        closedAt: createdAt,
+        totalParticipants: activeCompetitors.length,
+        totalWeeklyPoints: totalWeeklyPts,
+        topPodium: podiumMembers,
+        ranking: weeklyRankingSnapshot,
+        createdAt
+      });
+
+      setCurrentWeekNumber(nextWeekNum);
+      setLastWeekPodium(podiumMembers);
+      setLastWeekClosedAt(createdAt);
+
+      toast.success(`Semana encerrada! Pódio dos ganhadores registrado e ranking reiniciado.`);
     } catch (e: any) {
       console.error(e);
       toast.error('Erro ao encerrar a semana.');
@@ -457,6 +541,16 @@ export function GamificationManager() {
     } catch (e) {
       console.error(e);
       toast.error('Erro ao remover temporada.');
+    }
+  };
+
+  const handleDeletePastWeek = async (weekId: string, weekTitle: string) => {
+    try {
+      await deleteDoc(doc(db, 'past_weeks', weekId));
+      toast.success(`${weekTitle} removida do histórico.`);
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao remover semana arquivada.');
     }
   };
 
@@ -1138,6 +1232,217 @@ export function GamificationManager() {
         </div>
       </div>
 
+      {/* Pódio da Semana Anterior (Comprovação dos Ganhadores) */}
+      <div className="glass-card p-6 border-gold/40 mb-6 bg-gradient-to-br from-yellow-500/10 via-black/40 to-transparent">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold">
+              <Crown className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold uppercase tracking-widest text-gold">
+                  Pódio da Semana Anterior
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gold/20 text-gold border border-gold/30">
+                  Ganhadores Comprovados
+                </span>
+              </div>
+              <p className="text-xs text-white/60 mt-0.5">
+                {lastWeekClosedAt 
+                  ? `Fechamento realizado em ${new Date(lastWeekClosedAt).toLocaleString('pt-BR')}`
+                  : 'Nenhum fechamento semanal registrado ainda.'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {lastWeekPodium.length === 0 ? (
+          <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/5 text-center">
+            <Trophy className="w-8 h-8 text-white/20 mx-auto mb-2" />
+            <p className="text-sm text-white/60 font-medium">Nenhum pódio de semana anterior arquivado ainda.</p>
+            <p className="text-xs text-white/40 mt-1">Ao clicar em "Encerrar Semana", os ganhadores do 1º, 2º e 3º lugar aparecerão aqui como comprovação oficial.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* 1º Lugar */}
+            {(() => {
+              const p1 = lastWeekPodium.find(p => p.position === 1);
+              return (
+                <div className="p-4 rounded-xl bg-gradient-to-b from-yellow-500/20 to-yellow-500/5 border border-yellow-500/40 text-center relative overflow-hidden">
+                  <div className="w-12 h-12 rounded-full bg-yellow-500/20 border-2 border-yellow-500 flex items-center justify-center mx-auto mb-2 text-yellow-400 font-bold relative">
+                    <Crown className="w-6 h-6 text-yellow-400" />
+                    <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-yellow-500 text-carbon text-[10px] font-black flex items-center justify-center">1</span>
+                  </div>
+                  <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">1º Lugar • Campeão</span>
+                  <h4 className="font-bold text-white text-base truncate mt-0.5">{p1?.username || '—'}</h4>
+                  <p className="text-xs font-mono font-bold text-yellow-400 mt-0.5">{(p1?.points || 0).toLocaleString('pt-BR')} pts</p>
+                  <div className="mt-2 pt-2 border-t border-yellow-500/20 text-[11px] text-yellow-200/90 font-medium bg-black/30 rounded-lg py-1 px-2">
+                    🎁 {p1?.reward || 'Acesso Livre Sala VIP'}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* 2º Lugar */}
+            {(() => {
+              const p2 = lastWeekPodium.find(p => p.position === 2);
+              return (
+                <div className="p-4 rounded-xl bg-gradient-to-b from-gray-300/15 to-gray-300/5 border border-gray-300/30 text-center relative overflow-hidden">
+                  <div className="w-12 h-12 rounded-full bg-gray-300/20 border-2 border-gray-300 flex items-center justify-center mx-auto mb-2 text-gray-300 font-bold relative">
+                    <Trophy className="w-6 h-6 text-gray-300" />
+                    <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-gray-300 text-carbon text-[10px] font-black flex items-center justify-center">2</span>
+                  </div>
+                  <span className="text-[10px] font-black uppercase text-gray-300 tracking-wider">2º Lugar • Vice</span>
+                  <h4 className="font-bold text-white text-base truncate mt-0.5">{p2?.username || '—'}</h4>
+                  <p className="text-xs font-mono font-bold text-gray-300 mt-0.5">{(p2?.points || 0).toLocaleString('pt-BR')} pts</p>
+                  <div className="mt-2 pt-2 border-t border-gray-300/20 text-[11px] text-gray-200/90 font-medium bg-black/30 rounded-lg py-1 px-2">
+                    🎁 {p2?.reward || '1h VIP + Picolé Grátis'}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* 3º Lugar */}
+            {(() => {
+              const p3 = lastWeekPodium.find(p => p.position === 3);
+              return (
+                <div className="p-4 rounded-xl bg-gradient-to-b from-amber-700/20 to-amber-700/5 border border-amber-700/30 text-center relative overflow-hidden">
+                  <div className="w-12 h-12 rounded-full bg-amber-700/20 border-2 border-amber-700 flex items-center justify-center mx-auto mb-2 text-amber-500 font-bold relative">
+                    <Award className="w-6 h-6 text-amber-500" />
+                    <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-700 text-white text-[10px] font-black flex items-center justify-center">3</span>
+                  </div>
+                  <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">3º Lugar</span>
+                  <h4 className="font-bold text-white text-base truncate mt-0.5">{p3?.username || '—'}</h4>
+                  <p className="text-xs font-mono font-bold text-amber-500 mt-0.5">{(p3?.points || 0).toLocaleString('pt-BR')} pts</p>
+                  <div className="mt-2 pt-2 border-t border-amber-700/20 text-[11px] text-amber-200/90 font-medium bg-black/30 rounded-lg py-1 px-2">
+                    🎁 {p3?.reward || 'Picolé Grátis'}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* Histórico de Semanas Encerradas */}
+      <div className="glass-card p-6 border-white/10 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-white flex items-center gap-2">
+              <History className="w-4 h-4 text-gold" /> Histórico de Semanas Encerradas
+            </h3>
+            <p className="text-sm text-white/60 mt-1">Semanas finalizadas com seus respectivos pódios de ganhadores arquivados.</p>
+          </div>
+          <span className="text-xs text-white/40">
+            {pastWeeks.length} {pastWeeks.length === 1 ? 'semana arquivada' : 'semanas arquivadas'}
+          </span>
+        </div>
+
+        {pastWeeks.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-white/[0.02] border border-white/5 text-center">
+            <History className="w-8 h-8 text-white/20 mx-auto mb-2" />
+            <p className="text-sm text-white/60 font-medium">Nenhuma semana arquivada ainda.</p>
+            <p className="text-xs text-white/40 mt-1">Ao clicar em "Encerrar Semana", a semana será salva aqui com o pódio para comprovar os ganhadores.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {pastWeeks.map((week) => {
+              const isExpanded = expandedWeekAdmin === week.id;
+              const top1 = week.topPodium?.find(p => p.position === 1);
+              const top2 = week.topPodium?.find(p => p.position === 2);
+              const top3 = week.topPodium?.find(p => p.position === 3);
+
+              return (
+                <div key={week.id} className="p-4 rounded-2xl bg-black/30 border border-white/10 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-white text-base">{week.title || `Semana ${week.weekNumber}`}</h4>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">Fechada</span>
+                      </div>
+                      <p className="text-xs text-white/40 flex items-center gap-1.5 mt-0.5">
+                        <Calendar className="w-3.5 h-3.5 text-gold/70" />
+                        Encerrada em {new Date(week.closedAt || week.createdAt).toLocaleDateString('pt-BR')}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-white/60 bg-white/5 px-3 py-1.5 rounded-xl border border-white/5 flex items-center gap-2">
+                        <span>{week.totalParticipants || 0} competidores</span>
+                        <span>•</span>
+                        <span className="font-bold text-gold">{(week.totalWeeklyPoints || 0).toLocaleString('pt-BR')} pts</span>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeletePastWeek(week.id, week.title || `Semana ${week.weekNumber}`)}
+                        className="p-2 text-white/30 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-colors"
+                        title="Remover do Histórico"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Pódio dos 3 primeiros */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="p-2.5 rounded-xl bg-yellow-500/10 border border-yellow-500/20 flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-yellow-500 text-carbon font-bold flex items-center justify-center text-[10px] shrink-0">1º</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-white truncate">{top1?.username || '—'}</p>
+                        <p className="text-[10px] text-yellow-400 font-mono font-bold">{(top1?.points || 0).toLocaleString('pt-BR')} pts • {top1?.reward || 'Acesso VIP'}</p>
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-gray-300/10 border border-gray-300/20 flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-gray-300 text-carbon font-bold flex items-center justify-center text-[10px] shrink-0">2º</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-white truncate">{top2?.username || '—'}</p>
+                        <p className="text-[10px] text-gray-300 font-mono font-bold">{(top2?.points || 0).toLocaleString('pt-BR')} pts • {top2?.reward || '1h VIP + Picolé'}</p>
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-amber-700/10 border border-amber-700/20 flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-amber-700 text-white font-bold flex items-center justify-center text-[10px] shrink-0">3º</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-white truncate">{top3?.username || '—'}</p>
+                        <p className="text-[10px] text-amber-500 font-mono font-bold">{(top3?.points || 0).toLocaleString('pt-BR')} pts • {top3?.reward || 'Picolé'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Expandir Ranking Completo */}
+                  {week.ranking && week.ranking.length > 0 && (
+                    <div>
+                      <button
+                        onClick={() => setExpandedWeekAdmin(isExpanded ? null : week.id)}
+                        className="w-full flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-medium text-white/60 hover:text-white transition-colors"
+                      >
+                        <span>{isExpanded ? 'Ocultar Classificação' : 'Ver Classificação Gravada'}</span>
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {isExpanded && (
+                        <div className="mt-2 space-y-1.5 pt-2 border-t border-white/5">
+                          {week.ranking.map((member, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-black/40 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white/40 w-4 font-mono font-bold">{member.position}º</span>
+                                <span className="text-white font-medium">{member.username}</span>
+                                {member.tierName && <span className="text-[10px] text-white/40">({member.tierName})</span>}
+                              </div>
+                              <span className="font-mono font-bold text-gold">{member.points.toLocaleString('pt-BR')} pts</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Histórico de Temporadas Encerradas */}
       <div className="glass-card p-6 border-white/10 mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -1288,7 +1593,7 @@ export function GamificationManager() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[ 
             { name: 'Iniciante', bonus: 'Sem bônus' },
-            { name: 'Bronze', bonus: 'Sem bônus' },
+            { name: 'Bronze', bonus: '1 Picolé Grátis' },
             { name: 'Prata', bonus: '1h VIP' },
             { name: 'Ouro', bonus: '1h VIP + 5k pts' },
             { name: 'Platina', bonus: '3h VIP' },

@@ -65,6 +65,10 @@ export function useGamificationSettings() {
   const [seasonStartDate, setSeasonStartDate] = useState<string>('');
   const [seasonDurationMonths, setSeasonDurationMonths] = useState<number>(3);
   const [currentSeasonNumber, setCurrentSeasonNumber] = useState<number>(1);
+  const [currentWeekNumber, setCurrentWeekNumber] = useState<number>(1);
+  const [lastWeekPodium, setLastWeekPodium] = useState<any[]>([]);
+  const [lastWeekRanking, setLastWeekRanking] = useState<any[]>([]);
+  const [lastWeekClosedAt, setLastWeekClosedAt] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -86,6 +90,18 @@ export function useGamificationSettings() {
         if (data.currentSeasonNumber) {
           setCurrentSeasonNumber(Number(data.currentSeasonNumber));
         }
+        if (data.currentWeekNumber) {
+          setCurrentWeekNumber(Number(data.currentWeekNumber));
+        }
+        if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) {
+          setLastWeekPodium(data.lastWeekPodium);
+        }
+        if (data.lastWeekRanking && Array.isArray(data.lastWeekRanking)) {
+          setLastWeekRanking(data.lastWeekRanking);
+        }
+        if (data.lastWeekClosedAt) {
+          setLastWeekClosedAt(data.lastWeekClosedAt);
+        }
       }
       setLoading(false);
     }, (err) => {
@@ -105,6 +121,10 @@ export function useGamificationSettings() {
     seasonStartDate, 
     seasonDurationMonths, 
     currentSeasonNumber,
+    currentWeekNumber,
+    lastWeekPodium,
+    lastWeekRanking,
+    lastWeekClosedAt,
     seasonDates: dates,
     loading 
   };

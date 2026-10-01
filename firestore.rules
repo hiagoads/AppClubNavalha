@@ -38,7 +38,15 @@ service cloud.firestore {
                     && request.resource.data.points == 0
                     && request.resource.data.seasonalPoints == 0
                     && request.resource.data.weeklyPoints == 0;
-      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == clientId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'whatsapp', 'avatarUrl', 'firstName', 'lastName', 'dateOfBirth']));
+      allow update: if isAdmin() || (
+        isSignedIn() && request.auth.uid == clientId && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'username', 'whatsapp', 'avatarUrl', 'firstName', 'lastName', 'dateOfBirth',
+          'bonuses', 'seasonHighestTierLevel', 'highestTierLevel', 'lastPointsUpdate',
+          'points', 'seasonalPoints', 'weeklyPoints', 'lifetimePoints', 'level',
+          'seasonHighestPoints', 'highestSeasonalPoints', 'manualTierLevel', 'manualTierOverride'
+        ])
+      );
       allow delete: if isAdmin() || (isSignedIn() && request.auth.uid == clientId);
     }
 
@@ -83,6 +91,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /past_weeks/{weekId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /vip_stations/{stationId} {
       allow read: if true;
       allow write: if isAdmin();
@@ -90,6 +103,11 @@ service cloud.firestore {
 
     match /vip_sessions/{sessionId} {
       allow read: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.clientId);
+      allow write: if isAdmin();
+    }
+
+    match /vip_paused_sessions/{sessionId} {
+      allow read: if true;
       allow write: if isAdmin();
     }
   }

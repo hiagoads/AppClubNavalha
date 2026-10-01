@@ -17,19 +17,24 @@ import { useVipRoom } from '../hooks/useVipRoom';
 import { VipStationCard } from './vip/VipStationCard';
 import { StartSessionModal } from './vip/StartSessionModal';
 import { EditStationModal } from './vip/EditStationModal';
-import { VipStation, VipConsoleType, VipStationStatus } from '../types';
+import { PausedGameResolutionModal } from './modals/PausedGameResolutionModal';
+import { VipStation, VipConsoleType, VipStationStatus, VipPausedSession } from '../types';
 
 export function VipRoomManager() {
   const {
     stations,
     recentHistory,
+    pausedSessions,
     loading,
     addStation,
     updateStation,
     deleteStation,
     startSession,
     addTimeToSession,
-    endSession
+    endSession,
+    resumePausedSession,
+    creditPausedSessionToClient,
+    discardPausedSession
   } = useVipRoom();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'occupied' | 'available' | 'maintenance'>('all');
@@ -37,6 +42,7 @@ export function VipRoomManager() {
   const [editingStation, setEditingStation] = useState<VipStation | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [deletingStation, setDeletingStation] = useState<{ id: string; name: string } | null>(null);
+  const [resolvingPausedSession, setResolvingPausedSession] = useState<VipPausedSession | null>(null);
 
   // Métricas
   const totalStations = stations.length;
@@ -198,6 +204,67 @@ export function VipRoomManager() {
         </p>
       </div>
 
+      {/* Seção de Jogadores com tempo pausado para corte */}
+      {pausedSessions.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/10 via-carbon-light to-amber-500/5 border border-amber-500/30 rounded-2xl p-5 space-y-3.5 shadow-lg shadow-black/40">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                <Clock className="w-4 h-4 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  Jogadores com Tempo Pausado ({pausedSessions.length})
+                </h3>
+                <p className="text-xs text-white/50">
+                  O tempo foi pausado automaticamente quando o barbeiro chamou o cliente para o corte, liberando o console para outro jogador.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pausedSessions.map(ps => (
+              <div key={ps.id} className="bg-carbon border border-white/10 hover:border-gold/40 p-4 rounded-xl flex flex-col justify-between gap-3 transition-all">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      Pausado para Corte
+                    </span>
+                    <h4 className="font-bold text-white text-base mt-1">{ps.clientName}</h4>
+                    {ps.clientWhatsapp && <p className="text-xs text-white/50">{ps.clientWhatsapp}</p>}
+                    <p className="text-xs text-white/60 mt-1">
+                      Console original: <span className="text-white font-medium">{ps.stationName}</span>
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0 bg-gold/10 border border-gold/20 rounded-xl px-2.5 py-1.5">
+                    <span className="text-[9px] font-bold text-gold uppercase block">Restante</span>
+                    <span className="text-xl font-mono font-black text-gold">{ps.remainingMinutes}m</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+                  <button
+                    onClick={() => setResolvingPausedSession(ps)}
+                    className="flex-1 btn-primary text-xs py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 font-bold"
+                  >
+                    <Gamepad2 className="w-3.5 h-3.5" />
+                    Gerenciar Tempo
+                  </button>
+                  <button
+                    onClick={() => creditPausedSessionToClient(ps.id)}
+                    title="Guardar tempo na conta do cliente para outro dia"
+                    className="p-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs transition-colors shrink-0"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Grid de Estações */}
       {loading ? (
         <div className="p-12 text-center text-white/40">
@@ -330,6 +397,17 @@ export function VipRoomManager() {
             updateStation(editingStation.id, data);
           }
         }}
+      />
+
+      {/* Modal: Gerenciar Tempo de Jogo Pausado */}
+      <PausedGameResolutionModal
+        isOpen={!!resolvingPausedSession}
+        pausedSession={resolvingPausedSession}
+        availableStations={stations.filter(s => s.status === 'available')}
+        onClose={() => setResolvingPausedSession(null)}
+        onResume={(psId, stId) => resumePausedSession(psId, stId)}
+        onCreditToAccount={(psId, hours) => creditPausedSessionToClient(psId, hours)}
+        onDiscard={(psId) => discardPausedSession(psId)}
       />
 
       {/* Modal: Criar Nova Estação */}
