@@ -595,22 +595,25 @@ export default function ClientPanel() {
         <div className="mx-2 sm:mx-0">
           <button
             onClick={() => setShowRanking(true)}
-            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-gold/20 via-black/50 to-gold/10 border border-gold/30 hover:border-gold/60 text-left transition-all group shadow-lg shadow-black/40"
+            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-gold/20 via-black/50 to-gold/10 border border-gold/30 hover:border-gold/60 text-left transition-all group shadow-lg shadow-black/40 overflow-hidden"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 min-w-0 flex-1 pr-2">
               <div className="w-10 h-10 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold group-hover:scale-105 transition-transform shrink-0">
                 <Trophy className="w-5 h-5 text-gold" />
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-white flex items-center gap-1.5">
-                  Ranking Semanal & Pódio <Crown className="w-3.5 h-3.5 text-gold" />
-                </p>
-                <p className="text-[10px] text-white/50 truncate">
-                  Acompanhe os líderes e comprove os ganhadores do pódio
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="text-xs font-bold text-white">
+                    Ranking Semanal & Pódio
+                  </p>
+                  <Crown className="w-3.5 h-3.5 text-gold shrink-0" />
+                </div>
+                <p className="text-[11px] text-white/50 truncate">
+                  Veja a disputa e os ganhadores comprovados
                 </p>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-gold/70 group-hover:translate-x-0.5 transition-transform shrink-0 ml-2" />
+            <ChevronRight className="w-4 h-4 text-gold/70 group-hover:translate-x-0.5 transition-transform shrink-0" />
           </button>
         </div>
 
