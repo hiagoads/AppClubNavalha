@@ -54,39 +54,39 @@ export function useAuth() {
           setClientProfile(profileData);
           checkAndSyncClientRankBonuses(clientDoc.id, profileData).catch(() => {});
         } else {
-          // Force create the profile if we are logged in and it's missing!
-          // Add a small delay to allow ClientAuth to create it first.
-          setTimeout(async () => {
-            try {
-              if (!auth.currentUser) return;
-              const checkDoc = await getDoc(doc(db, 'clients', u.uid));
-              if (!checkDoc.exists()) {
-                const baseName = u.displayName || u.email?.split('@')[0] || 'cliente';
-                const sanitized = sanitizeUsername(baseName) || 'cliente';
-                const validUsername = sanitized.length < 5 ? (sanitized + 'club').slice(0, 15) : sanitized;
-                await setDoc(doc(db, 'clients', u.uid), {
-                  username: validUsername,
-                  email: u.email || '',
-                  avatarUrl: '',
-                  whatsapp: '',
-                  firstName: '',
-                  lastName: '',
-                  dateOfBirth: '',
-                  points: 0,
-                  seasonalPoints: 0,
-                  weeklyPoints: 0,
-                  createdAt: new Date().toISOString()
-                });
-                // Snapshot will re-fire automatically when setDoc succeeds
-              }
-            } catch(e: any) {
-               if (e.code !== 'permission-denied') console.error("Could not auto-create profile", e);
-               setClientProfile(null);
-            }
-          }, 3000);
+          // Se o documento ainda está carregando do cache ou se o usuário é administrador, não auto-cria perfil de cliente
+          if (adminStatus || (clientDoc as any).metadata?.fromCache) {
+            setClientProfile(null);
+            return;
+          }
+
+          // Se o servidor confirmou que o documento realmente não existe para este usuário cliente
+          try {
+            if (!auth.currentUser || auth.currentUser.uid !== u.uid) return;
+            const baseName = u.displayName || u.email?.split('@')[0] || 'cliente';
+            const sanitized = sanitizeUsername(baseName) || 'cliente';
+            const validUsername = sanitized.length < 5 ? (sanitized + 'club').slice(0, 15) : sanitized;
+            await setDoc(doc(db, 'clients', u.uid), {
+              username: validUsername,
+              email: u.email || '',
+              avatarUrl: '',
+              whatsapp: '',
+              firstName: '',
+              lastName: '',
+              dateOfBirth: '',
+              points: 0,
+              seasonalPoints: 0,
+              weeklyPoints: 0,
+              createdAt: new Date().toISOString()
+            });
+            // Snapshot will re-fire automatically when setDoc succeeds
+          } catch(e: any) {
+            if (e?.code !== 'permission-denied') console.warn("Notice: client profile auto-creation pending:", e?.message || e);
+            setClientProfile(null);
+          }
         }
       }, (error) => {
-        if (error.code !== 'permission-denied') console.error("Error fetching client profile:", error);
+        if (error?.code !== 'permission-denied') console.warn("Notice fetching client profile:", error?.message || error);
         setClientProfile(null);
       });
 

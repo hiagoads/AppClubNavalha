@@ -1,6 +1,6 @@
 import { collection, getDocs, doc, updateDoc, query, where, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { DEFAULT_THRESHOLDS, getLevelTier, parseDateToMs } from './tierSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, parseDateToMs, getActiveThresholds, setActiveThresholds } from './tierSystem';
 import { checkAndSyncClientRankBonuses, RankBonusDefinition, getActiveRankBonuses, DEFAULT_RANK_BONUSES } from './bonusSystem';
 
 /**
@@ -94,35 +94,32 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
   };
 
   try {
-    // 1. Obter configurações de gamificação se não fornecidas
-    let effectiveThresholds = options?.thresholds;
+    // 1. Obter configurações de gamificação diretamente do Firestore (Fonte da Verdade)
+    let thresholdsToUse = options?.thresholds && options.thresholds.length >= 8 ? options.thresholds : (getActiveThresholds() || DEFAULT_THRESHOLDS);
     let closedAt = options?.lastWeekClosedAt;
-    let effectiveRankBonuses = options?.rankBonuses;
+    let bonusesToUse = options?.rankBonuses || getActiveRankBonuses() || DEFAULT_RANK_BONUSES;
 
-    if (!effectiveThresholds || !closedAt || !effectiveRankBonuses) {
-      try {
-        const settingsSnap = await getDoc(doc(db, 'settings', 'gamification'));
-        if (settingsSnap.exists()) {
-          const sData = settingsSnap.data();
-          if (!effectiveThresholds && Array.isArray(sData.tierThresholds)) {
-            effectiveThresholds = sData.tierThresholds;
-          }
-          if (!closedAt && sData.lastWeekClosedAt) {
-            closedAt = sData.lastWeekClosedAt;
-          }
-          if (!effectiveRankBonuses && Array.isArray(sData.rankBonuses)) {
-            effectiveRankBonuses = sData.rankBonuses;
-          }
+    try {
+      const settingsSnap = await getDoc(doc(db, 'settings', 'gamification'));
+      if (settingsSnap.exists()) {
+        const sData = settingsSnap.data();
+        if (Array.isArray(sData.tierThresholds) && sData.tierThresholds.length >= 8) {
+          thresholdsToUse = sData.tierThresholds.map((n: any) => Number(n) || 0);
+          setActiveThresholds(thresholdsToUse);
         }
-      } catch (err) {
-        // ignora se falhar
+        if (sData.lastWeekClosedAt) {
+          closedAt = sData.lastWeekClosedAt;
+        }
+        if (Array.isArray(sData.rankBonuses)) {
+          bonusesToUse = sData.rankBonuses;
+        }
       }
+    } catch (err) {
+      // ignora se falhar
     }
 
     const { startTime, startIso, weekStartMs } = getCurrentWeekWindow(closedAt);
     result.currentWeekStart = startIso;
-    const thresholdsToUse = effectiveThresholds && effectiveThresholds.length >= 8 ? effectiveThresholds : DEFAULT_THRESHOLDS;
-    const bonusesToUse = effectiveRankBonuses || getActiveRankBonuses() || DEFAULT_RANK_BONUSES;
 
     // 2. Carregar todos os clientes sem limites arbitrários
     const clientsSnap = await getDocs(collection(db, 'clients'));
@@ -228,11 +225,21 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
             
             // Adições e ganhos
             if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
-              calculatedWeeklyPoints += Math.max(0, pts);
+              // Se foi marcado explicitamente como APENAS saldo atual ('balance_only'), não altera ranking semanal
+              if (tx.scope === 'balance_only') {
+                // não conta no semanal
+              } else {
+                calculatedWeeklyPoints += Math.max(0, pts);
+              }
             } 
             // Deduções e estornos
             else if (tx.type === 'manual_remove' || tx.type === 'adjusted' || tx.type === 'reverted' || pts < 0) {
-              calculatedWeeklyPoints += pts; // pts é negativo, reduz pontuação semanal
+              // Se foi remoção APENAS do saldo gastável ('balance_only') ou resgate de prêmio ('redeem'), NÃO deduz do ranking da semana!
+              if (tx.scope === 'balance_only' || tx.type === 'redeem') {
+                // não deduz do semanal!
+              } else {
+                calculatedWeeklyPoints += pts; // pts é negativo, reduz pontuação semanal
+              }
             }
           }
         }
@@ -274,7 +281,8 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
         }
 
         // B) Cálculo da Patente correta e pontos de pico
-        const peakPoints = Math.max(
+        const currentActiveMax = Math.max(0, client.seasonalPoints ?? 0, client.points ?? 0);
+        let peakPoints = Math.max(
           0,
           client.seasonHighestPoints ?? 0,
           client.highestSeasonalPoints ?? 0,
@@ -282,46 +290,73 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
           client.points ?? 0
         );
 
-        const currentHighestTier = Math.max(
-          1,
-          client.seasonHighestTierLevel ?? 1,
-          client.highestTierLevel ?? 1
-        );
+        // Se o cliente teve os pontos e temporada zerados por correção ou estorno,
+        // zera também resíduos fantasmas de pico para que a patente volte corretamente para Iniciante (Nv. 1)
+        if (currentActiveMax === 0 && (client.seasonHighestPoints ?? 0) > 0 && !client.manualTierOverride) {
+          peakPoints = 0;
+          updatePayload.seasonHighestPoints = 0;
+          updatePayload.highestSeasonalPoints = 0;
+          needsUpdate = true;
+        }
 
-        const calculatedTier = getLevelTier(
-          peakPoints, 
-          thresholdsToUse, 
-          currentHighestTier
-        );
+        // Calcula a patente exata merecida com base nos pontos de pico e metas ativas definidas pelo admin
+        let legitimateTierLevel = 1;
+        for (let i = thresholdsToUse.length - 1; i >= 0; i--) {
+          if (peakPoints >= thresholdsToUse[i]) {
+            legitimateTierLevel = i + 1;
+            break;
+          }
+        }
 
-        const newHighestTier = Math.max(currentHighestTier, calculatedTier.tierLevel);
+        // Se houver override manual definido pelo admin, respeita o override
+        const targetTierLevel = (client.manualTierOverride && typeof client.manualTierLevel === 'number' && client.manualTierLevel >= 1 && client.manualTierLevel <= 8)
+          ? client.manualTierLevel
+          : legitimateTierLevel;
 
-        // Nível vitalício (1 por 10.000 pts)
-        const lifetime = Math.max(0, client.lifetimePoints ?? Math.max(client.points || 0, client.seasonalPoints || 0, peakPoints));
-        const calculatedLevel = Math.floor(lifetime / 10000) + 1;
-
-        if (client.level !== calculatedTier.tierLevel ||
-            client.seasonHighestTierLevel !== newHighestTier ||
-            client.highestTierLevel !== newHighestTier ||
-            (client.seasonHighestPoints ?? 0) < peakPoints ||
-            client.level !== calculatedLevel) {
+        if (client.level !== targetTierLevel ||
+            client.seasonHighestTierLevel !== targetTierLevel ||
+            client.highestTierLevel !== targetTierLevel ||
+            (client.seasonHighestPoints ?? 0) !== peakPoints) {
           
-          updatePayload.level = calculatedTier.tierLevel;
-          updatePayload.seasonHighestTierLevel = newHighestTier;
-          updatePayload.highestTierLevel = newHighestTier;
+          updatePayload.level = targetTierLevel;
+          updatePayload.seasonHighestTierLevel = targetTierLevel;
+          updatePayload.highestTierLevel = targetTierLevel;
           updatePayload.seasonHighestPoints = peakPoints;
           updatePayload.highestSeasonalPoints = peakPoints;
           needsUpdate = true;
           result.tiersFixedCount++;
         }
 
-        // C) Aplicar atualização no banco se necessário
+        // C) Limpeza de bônus indevidos de patentes superiores que o cliente ainda não atingiu
+        let clientBonuses: any[] = Array.isArray(client.bonuses) ? [...client.bonuses] : [];
+        const initialBonusCount = clientBonuses.length;
+
+        // Filtra para remover bônus de patentes (category === 'rank_level') cujo nível seja maior que o targetTierLevel
+        clientBonuses = clientBonuses.filter((b: any) => {
+          if (b.category === 'rank_level' && !b.isRedeemed) {
+            const bonusTierDef = bonusesToUse.find(cfg => 
+              cfg.rankKey === b.rankKey || 
+              cfg.title?.trim().toLowerCase() === b.title?.trim().toLowerCase()
+            );
+            if (bonusTierDef && bonusTierDef.level > targetTierLevel) {
+              return false; // Remove bônus de patente indevida
+            }
+          }
+          return true;
+        });
+
+        if (clientBonuses.length !== initialBonusCount) {
+          updatePayload.bonuses = clientBonuses;
+          needsUpdate = true;
+        }
+
+        // D) Aplicar atualização no banco se necessário
         if (needsUpdate) {
           updatePayload.lastReconciledAt = nowIso;
           await updateDoc(doc(db, 'clients', client.id), updatePayload);
           result.updatedCount++;
 
-          // Sincronizar bônus de patente se subiu de nível/patente
+          // Sincronizar bônus de patente para a patente legitimamente conquistada
           try {
             await checkAndSyncClientRankBonuses(
               client.id,

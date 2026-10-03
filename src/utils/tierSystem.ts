@@ -224,15 +224,9 @@ export const getClientTier = (
     client.points ?? 0
   );
 
-  // Patente mínima já conquistada nesta temporada
-  const minTier = Math.max(
-    1,
-    client.seasonHighestTierLevel ?? 1,
-    client.highestTierLevel ?? 1
-  );
-  
-  // Tier is based on seasonal points without regression
-  const tierInfo = getLevelTier(peakSeasonalPoints, effectiveThresholds, minTier);
+  // A patente é estritamente conquistada com base nos pontos de pico da temporada atual
+  // e nas metas de pontos (thresholds) ativas definidas pelo administrador
+  const tierInfo = getLevelTier(peakSeasonalPoints, effectiveThresholds, 1);
 
   return {
     level, // Nível do usuário

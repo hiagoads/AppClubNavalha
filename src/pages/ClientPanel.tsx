@@ -87,17 +87,12 @@ export default function ClientPanel() {
   }, [clientProfile?.id, clientProfile?.points, clientProfile?.seasonalPoints, clientProfile?.seasonHighestTierLevel]);
 
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const snap = await getDoc(doc(db, 'settings', 'gamification'));
-        if (snap.exists()) {
-          setDefaultAvatar(snap.data().defaultAvatarUrl || '');
-        }
-      } catch (e: any) {
-        if (e.code !== 'permission-denied') console.error(e);
+    const unsub = onSnapshot(doc(db, 'settings', 'gamification'), (snap) => {
+      if (snap.exists()) {
+        setDefaultAvatar(snap.data().defaultAvatarUrl || '');
       }
-    };
-    loadSettings();
+    }, () => {});
+    return () => unsub();
   }, []);
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { DEFAULT_THRESHOLDS } from '../utils/tierSystem';
+import { DEFAULT_THRESHOLDS, getActiveThresholds, setActiveThresholds } from '../utils/tierSystem';
 import { DEFAULT_RANK_BONUSES, RankBonusDefinition, getActiveRankBonuses, setActiveRankBonuses } from '../utils/bonusSystem';
 
 export interface RewardItem {
@@ -61,7 +61,10 @@ export const DEFAULT_REWARDS: RewardItem[] = [
 ];
 
 export function useGamificationSettings() {
-  const [thresholds, setThresholds] = useState<number[]>(DEFAULT_THRESHOLDS);
+  const [thresholds, setThresholds] = useState<number[]>(() => {
+    const active = getActiveThresholds();
+    return Array.isArray(active) && active.length >= 8 ? active : DEFAULT_THRESHOLDS;
+  });
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
   const [rankBonuses, setRankBonuses] = useState<RankBonusDefinition[]>(getActiveRankBonuses() || DEFAULT_RANK_BONUSES);
   const [seasonStartDate, setSeasonStartDate] = useState<string>('');
@@ -77,8 +80,9 @@ export function useGamificationSettings() {
     const unsub = onSnapshot(doc(db, 'settings', 'gamification'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        if (data.tierThresholds && Array.isArray(data.tierThresholds)) {
+        if (data.tierThresholds && Array.isArray(data.tierThresholds) && data.tierThresholds.length >= 8) {
           setThresholds(data.tierThresholds);
+          setActiveThresholds(data.tierThresholds);
         }
         if (data.rewards && Array.isArray(data.rewards)) {
           setRewards(data.rewards);

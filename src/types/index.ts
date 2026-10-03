@@ -224,7 +224,8 @@ export interface PointTransaction {
   clientName?: string;
   clientAvatar?: string;
   points: number;
-  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction';
+  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction' | 'reverted';
+  scope?: 'balance_only' | 'all_balances' | 'custom_adjustment';
   description: string;
   balanceAfter?: number;
   bookingId?: string;

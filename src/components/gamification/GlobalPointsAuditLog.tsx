@@ -47,10 +47,10 @@ export function GlobalPointsAuditLog({
       return t.type === 'redeem';
     }
     if (typeFilter === 'manual') {
-      return t.type === 'manual_add' || t.type === 'manual_remove';
+      return t.type === 'manual_add' || t.type === 'manual_remove' || t.type === 'reverted';
     }
     if (typeFilter === 'correction') {
-      return t.type === 'correction';
+      return t.type === 'correction' || t.type === 'reverted';
     }
     return true;
   });
@@ -69,6 +69,13 @@ export function GlobalPointsAuditLog({
         return (
           <span className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 rounded-md uppercase">
             <Award className="w-3 h-3" /> Resgate Aprovado
+          </span>
+        );
+      }
+      if (type === 'reverted') {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-400 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-md uppercase">
+            <History className="w-3 h-3" /> Reversão de Erro
           </span>
         );
       }

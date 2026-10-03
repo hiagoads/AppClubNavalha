@@ -481,7 +481,7 @@ export default function AdminDashboard() {
             lifetimePoints: newLifetime 
           }, thresholds);
 
-          const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, updatedTier.tierLevel);
+          const newHighestTier = updatedTier.tierLevel;
 
           const nowIso = new Date().toISOString();
 
@@ -494,7 +494,7 @@ export default function AdminDashboard() {
             highestTierLevel: newHighestTier,
             weeklyPoints: increment(pointsToGive),
             lifetimePoints: increment(pointsToGive),
-            level: updatedTier.level,
+            level: updatedTier.tierLevel,
             manualTierOverride: false,
             manualTierLevel: newHighestTier,
             lastPointsUpdate: nowIso

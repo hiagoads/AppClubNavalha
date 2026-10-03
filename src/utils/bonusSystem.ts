@@ -182,12 +182,9 @@ export function getEligibleRankBonuses(
   if (!clientData) return { toAddBonuses: [], pointsToAdd: 0, currentLevel: 1 };
 
   const tier = getClientTier(clientData, thresholds);
-  const currentTierLevel = Math.max(
-    tier.tierLevel,
-    clientData.seasonHighestTierLevel ?? 1,
-    clientData.highestTierLevel ?? 1,
-    clientData.manualTierLevel ?? 1
-  );
+  const currentTierLevel = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+    ? clientData.manualTierLevel
+    : tier.tierLevel;
 
   const existingBonuses: ClientBonus[] = clientData.bonuses || [];
   const toAddBonuses: ClientBonus[] = [];
@@ -246,21 +243,19 @@ export async function checkAndSyncClientRankBonuses(
 
   let activeThresholds = thresholds;
   let rankBonusesToUse = customRankBonuses;
-  if (!activeThresholds || activeThresholds.length < 8 || rankBonusesToUse === undefined) {
-    try {
-      const settingsDoc = await getDoc(doc(db, 'settings', 'gamification'));
-      if (settingsDoc.exists()) {
-        const data = settingsDoc.data();
-        if (!activeThresholds && Array.isArray(data.tierThresholds)) {
-          activeThresholds = data.tierThresholds;
-        }
-        if (rankBonusesToUse === undefined && Array.isArray(data.rankBonuses)) {
-          rankBonusesToUse = data.rankBonuses;
-        }
+  try {
+    const settingsDoc = await getDoc(doc(db, 'settings', 'gamification'));
+    if (settingsDoc.exists()) {
+      const data = settingsDoc.data();
+      if (Array.isArray(data.tierThresholds) && data.tierThresholds.length >= 8) {
+        activeThresholds = data.tierThresholds.map((n: any) => Number(n) || 0);
       }
-    } catch {
-      // fallback
+      if (rankBonusesToUse === undefined && Array.isArray(data.rankBonuses)) {
+        rankBonusesToUse = data.rankBonuses;
+      }
     }
+  } catch {
+    // fallback
   }
 
   const effectiveRankBonuses = Array.isArray(rankBonusesToUse) 

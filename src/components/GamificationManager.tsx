@@ -140,36 +140,31 @@ export function GamificationManager() {
       setLoadingTransactions(false);
     });
 
-    // Load settings
-    const loadSettings = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, 'settings', 'gamification'));
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setDefaultAvatarUrl(data.defaultAvatarUrl || '');
-          setSeasonStart(data.seasonStartDate || '');
-          setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
-          if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
-          if (data.currentWeekNumber) setCurrentWeekNumber(Number(data.currentWeekNumber));
-          if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) setLastWeekPodium(data.lastWeekPodium);
-          if (data.lastWeekClosedAt) setLastWeekClosedAt(data.lastWeekClosedAt);
-          if (data.tierThresholds) {
-            setTierThresholds(data.tierThresholds);
-            setActiveThresholds(data.tierThresholds);
-          }
-          if (data.rankBonuses && Array.isArray(data.rankBonuses)) {
-            setRankBonuses(data.rankBonuses);
-            setActiveRankBonuses(data.rankBonuses);
-          }
-          if (data.rewards && Array.isArray(data.rewards)) setRewards(data.rewards);
+    // Load settings in real-time
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'gamification'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setDefaultAvatarUrl(data.defaultAvatarUrl || '');
+        setSeasonStart(data.seasonStartDate || '');
+        setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
+        if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
+        if (data.currentWeekNumber) setCurrentWeekNumber(Number(data.currentWeekNumber));
+        if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) setLastWeekPodium(data.lastWeekPodium);
+        if (data.lastWeekClosedAt) setLastWeekClosedAt(data.lastWeekClosedAt);
+        if (data.tierThresholds) {
+          setTierThresholds(data.tierThresholds);
+          setActiveThresholds(data.tierThresholds);
         }
-      } catch (e: any) {
-        if (e.code !== 'permission-denied') console.error(e);
-      } finally {
-        setLoading(false);
+        if (data.rankBonuses && Array.isArray(data.rankBonuses)) {
+          setRankBonuses(data.rankBonuses);
+          setActiveRankBonuses(data.rankBonuses);
+        }
+        if (data.rewards && Array.isArray(data.rewards)) setRewards(data.rewards);
       }
-    };
-    loadSettings();
+      setLoading(false);
+    }, () => {
+      setLoading(false);
+    });
 
     // Listen to past seasons
     const qPast = query(collection(db, 'past_seasons'), orderBy('seasonNumber', 'desc'));
@@ -193,6 +188,7 @@ export function GamificationManager() {
       unsubscribe();
       unsubClients();
       unsubTx();
+      unsubSettings();
       unsubPast();
       unsubPastWeeks();
     };
@@ -338,8 +334,10 @@ export function GamificationManager() {
             clientData.points ?? 0
           );
           const calculatedTier = getLevelTier(peak, tierThresholds, 1);
-          const newHighest = Math.max(clientData.seasonHighestTierLevel ?? 1, calculatedTier.tierLevel);
-          if (clientData.seasonHighestTierLevel !== newHighest || clientData.highestTierLevel !== newHighest) {
+          const newHighest = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+            ? clientData.manualTierLevel
+            : calculatedTier.tierLevel;
+          if (clientData.seasonHighestTierLevel !== newHighest || clientData.highestTierLevel !== newHighest || clientData.level !== newHighest) {
             await updateDoc(doc(db, 'clients', d.id), {
               seasonHighestTierLevel: newHighest,
               highestTierLevel: newHighest,
@@ -907,8 +905,10 @@ export function GamificationManager() {
           newSeasonal,
           newPts
         );
-        const tierInfo = getLevelTier(currentHighest, tierThresholds, clientData.seasonHighestTierLevel ?? 1);
-        const newHighestTier = Math.max(clientData.seasonHighestTierLevel ?? 1, tierInfo.tierLevel);
+        const tierInfo = getLevelTier(currentHighest, tierThresholds, 1);
+        const newHighestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+          ? clientData.manualTierLevel
+          : tierInfo.tierLevel;
 
         const nowIso = new Date().toISOString();
 
@@ -921,7 +921,7 @@ export function GamificationManager() {
           highestTierLevel: newHighestTier,
           weeklyPoints: newWeekly,
           lifetimePoints: newLifetime,
-          level: newLevel,
+          level: newHighestTier,
           lastPointsUpdate: nowIso
         });
 
