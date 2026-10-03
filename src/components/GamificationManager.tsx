@@ -6,13 +6,16 @@ import {
   Gamepad2, Scissors, Edit2, Save, Trash2, Sparkles, RefreshCw, Calendar, Crown, Zap, 
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, History, AlertTriangle, ShieldAlert, FileText, ArrowUpRight, ArrowDownRight, ExternalLink 
 } from 'lucide-react';
-import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking, setActiveThresholds } from '../utils/tierSystem';
-import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG } from '../utils/bonusSystem';
+import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking, setActiveThresholds, getTierName, getTierTheme, parseDateToMs } from '../utils/tierSystem';
+import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG, DEFAULT_RANK_BONUSES, RankBonusDefinition, setActiveRankBonuses, getActiveRankBonuses } from '../utils/bonusSystem';
 import { DEFAULT_REWARDS, RewardItem, calculateSeasonDates } from '../hooks/useGamificationSettings';
+import { useGamificationAutoSync } from '../hooks/useGamificationAutoSync';
+import { getCurrentWeekWindow } from '../utils/pointsReconciler';
 import toast from 'react-hot-toast';
 import { compressImage } from '../utils/imageUtils';
 import { PastSeason, PastWeek, SeasonPodiumMember, PointTransaction } from '../types';
 import { ClientPointsAuditModal } from './modals/ClientPointsAuditModal';
+import { EditRankBonusModal } from './modals/EditRankBonusModal';
 import { GlobalPointsAuditLog } from './gamification/GlobalPointsAuditLog';
 
 export function GamificationManager() {
@@ -51,6 +54,8 @@ export function GamificationManager() {
   const [weekStart, setWeekStart] = useState('');
   const [currentWeekNumber, setCurrentWeekNumber] = useState<number>(1);
   const [tierThresholds, setTierThresholds] = useState<number[]>(DEFAULT_THRESHOLDS);
+  const [rankBonuses, setRankBonuses] = useState<RankBonusDefinition[]>(getActiveRankBonuses() || DEFAULT_RANK_BONUSES);
+  const [editingTierForBonus, setEditingTierForBonus] = useState<number | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [isSavingSeason, setIsSavingSeason] = useState(false);
   const [isSyncingRankBonuses, setIsSyncingRankBonuses] = useState(false);
@@ -62,6 +67,27 @@ export function GamificationManager() {
   const [lastWeekClosedAt, setLastWeekClosedAt] = useState<string>('');
   const [pastWeeks, setPastWeeks] = useState<PastWeek[]>([]);
   const [expandedWeekAdmin, setExpandedWeekAdmin] = useState<string | null>(null);
+
+  // Auto-sync hook para verificação periódica a cada 1 minuto e em tempo real
+  const { isSyncing: isAutoSyncing, triggerManualSync } = useGamificationAutoSync({ enabled: true, intervalMs: 60000 });
+
+  // Lista dos competidores ativos na semana corrente (atenta à data dos créditos/débitos)
+  const activeWeeklyClients = React.useMemo(() => {
+    const { startTime } = getCurrentWeekWindow(lastWeekClosedAt);
+    const weekStartMs = startTime.getTime();
+
+    const list = clients.filter((c: any) => {
+      const weekly = c.weeklyPoints ?? 0;
+      if (weekly > 0) return true;
+      const lastUpdateMs = parseDateToMs(c.lastPointsUpdate) || parseDateToMs(c.updatedAt);
+      if (lastUpdateMs >= weekStartMs && ((c.seasonalPoints || 0) > 0 || (c.points || 0) > 0)) {
+        return true;
+      }
+      return false;
+    });
+
+    return [...list].sort(compareClientsForRanking);
+  }, [clients, lastWeekClosedAt]);
 
   // Rewards State
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
@@ -131,6 +157,10 @@ export function GamificationManager() {
             setTierThresholds(data.tierThresholds);
             setActiveThresholds(data.tierThresholds);
           }
+          if (data.rankBonuses && Array.isArray(data.rankBonuses)) {
+            setRankBonuses(data.rankBonuses);
+            setActiveRankBonuses(data.rankBonuses);
+          }
           if (data.rewards && Array.isArray(data.rewards)) setRewards(data.rewards);
         }
       } catch (e: any) {
@@ -168,17 +198,131 @@ export function GamificationManager() {
     };
   }, []);
 
+  const handleSaveTierBonuses = async (
+    tierLevel: number,
+    newTierBonuses: RankBonusDefinition[],
+    syncClients: boolean = true
+  ) => {
+    const otherBonuses = rankBonuses.filter(b => b.level !== tierLevel);
+    const updated = [...otherBonuses, ...newTierBonuses].sort((a, b) => a.level - b.level);
+    setRankBonuses(updated);
+    setActiveRankBonuses(updated);
+
+    try {
+      await setDoc(doc(db, 'settings', 'gamification'), {
+        rankBonuses: updated
+      }, { merge: true });
+
+      if (syncClients) {
+        let syncedCount = 0;
+        try {
+          const snap = await getDocs(collection(db, 'clients'));
+          for (const d of snap.docs) {
+            const clientData = d.data();
+            const peak = Math.max(
+              0,
+              clientData.seasonHighestPoints ?? 0,
+              clientData.highestSeasonalPoints ?? 0,
+              clientData.seasonalPoints ?? 0,
+              clientData.points ?? 0
+            );
+            const calculatedTier = getLevelTier(peak, tierThresholds, 1);
+            const clientLvl = Math.max(
+              clientData.seasonHighestTierLevel ?? 1,
+              clientData.highestTierLevel ?? 1,
+              clientData.manualTierLevel ?? 1,
+              calculatedTier.tierLevel
+            );
+
+            if (clientLvl >= tierLevel) {
+              const res = await checkAndSyncClientRankBonuses(
+                d.id,
+                clientData,
+                tierThresholds,
+                updated
+              );
+              if (res && res.awardedBonuses && res.awardedBonuses.length > 0) {
+                syncedCount++;
+              }
+            }
+          }
+        } catch (syncErr) {
+          console.warn('Erro ao sincronizar clientes para novos prêmios:', syncErr);
+        }
+
+        if (newTierBonuses.length === 0) {
+          toast.success(`✨ Patente ${getTierName(tierLevel)} agora está sem bônus!`);
+        } else if (syncedCount > 0) {
+          toast.success(`🎉 Prêmios de ${getTierName(tierLevel)} salvos e distribuídos para ${syncedCount} cliente(s)!`);
+        } else {
+          toast.success(`🎉 Prêmios da patente ${getTierName(tierLevel)} gravados com sucesso no banco de dados!`);
+        }
+      } else {
+        if (newTierBonuses.length === 0) {
+          toast.success(`✨ Patente ${getTierName(tierLevel)} agora está sem bônus!`);
+        } else {
+          toast.success(`🎉 Prêmios da patente ${getTierName(tierLevel)} gravados com sucesso no banco de dados!`);
+        }
+      }
+    } catch (err: any) {
+      if (err.code !== 'permission-denied') console.error('Erro ao salvar prêmios da patente:', err);
+      toast.error('Erro ao salvar prêmios no banco de dados.');
+    }
+  };
+
+  const handleDeleteSingleBonus = async (bonusToDelete: RankBonusDefinition, tierName: string) => {
+    const updated = rankBonuses.filter(b => {
+      if (b.rankKey && bonusToDelete.rankKey) {
+        return b.rankKey !== bonusToDelete.rankKey;
+      }
+      return !(b.level === bonusToDelete.level && b.title === bonusToDelete.title);
+    });
+    setRankBonuses(updated);
+    setActiveRankBonuses(updated);
+
+    try {
+      await setDoc(doc(db, 'settings', 'gamification'), {
+        rankBonuses: updated
+      }, { merge: true });
+      toast.success(`🗑️ Prêmio "${bonusToDelete.title}" excluído da patente ${tierName}!`);
+    } catch (e: any) {
+      if (e.code !== 'permission-denied') console.error('Erro ao excluir prêmio:', e);
+      toast.error('Erro ao excluir prêmio do banco de dados.');
+    }
+  };
+
+  const handleQuickSetNoBonus = async (tierLevel: number, tierName: string) => {
+    if (!window.confirm(`Tem certeza que deseja definir a patente ${tierName} como sem bônus?`)) {
+      return;
+    }
+    const updated = rankBonuses.filter(b => b.level !== tierLevel);
+    setRankBonuses(updated);
+    setActiveRankBonuses(updated);
+
+    try {
+      await setDoc(doc(db, 'settings', 'gamification'), {
+        rankBonuses: updated
+      }, { merge: true });
+      toast.success(`✨ Patente ${tierName} definida como sem bônus com sucesso!`);
+    } catch (e: any) {
+      if (e.code !== 'permission-denied') console.error('Erro ao salvar patente sem bônus:', e);
+      toast.error('Erro ao salvar no banco de dados.');
+    }
+  };
+
   const handleSaveSeason = async () => {
     setIsSavingSeason(true);
     try {
       // Atualiza o cache em memória imediatamente em todo o sistema
       setActiveThresholds(tierThresholds);
+      setActiveRankBonuses(rankBonuses);
 
       await setDoc(doc(db, 'settings', 'gamification'), {
         seasonStartDate: seasonStart,
         seasonDurationMonths: parseInt(seasonDuration),
         currentSeasonNumber: Number(currentSeasonNumber),
-        tierThresholds
+        tierThresholds,
+        rankBonuses
       }, { merge: true });
 
       // Atualiza também todos os clientes existentes cujas patentes salvas estejam desalinhadas com os novos limites
@@ -206,13 +350,13 @@ export function GamificationManager() {
             ...clientData,
             seasonHighestTierLevel: newHighest,
             highestTierLevel: newHighest
-          }, tierThresholds);
+          }, tierThresholds, rankBonuses);
         }
       } catch (clientErr) {
         console.warn('Erro ao atualizar patentes dos clientes com novos limites:', clientErr);
       }
 
-      toast.success('Configuração da Temporada salva!');
+      toast.success('Níveis e prêmios por patente salvos com sucesso!');
     } catch (e: any) {
       if (e.code !== 'permission-denied') console.error(e);
       toast.error('Erro ao salvar temporada.');
@@ -563,7 +707,7 @@ export function GamificationManager() {
 
       for (const d of snap.docs) {
         const clientData = d.data();
-        const res = await checkAndSyncClientRankBonuses(d.id, clientData, tierThresholds);
+        const res = await checkAndSyncClientRankBonuses(d.id, clientData, tierThresholds, rankBonuses);
         if (res && res.awardedBonuses && res.awardedBonuses.length > 0) {
           awardedClientsCount++;
           totalBonusesAwarded += res.awardedBonuses.length;
@@ -1205,6 +1349,18 @@ export function GamificationManager() {
             ) : (
               <div className="flex flex-col sm:flex-row gap-3">
                 <button 
+                  onClick={() => triggerManualSync()}
+                  disabled={isAutoSyncing}
+                  className="px-4 py-2.5 bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border border-blue-500/30 hover:border-blue-500/50 rounded-xl font-bold transition-all text-xs flex items-center justify-center gap-2 shadow-sm"
+                  title="Executa a verificação periódica de pontuações e transações de todos os clientes, atualizando o ranking semanal e as patentes"
+                >
+                  <RefreshCw className={`w-4 h-4 text-blue-400 shrink-0 ${isAutoSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isAutoSyncing ? 'Verificando...' : 'Verificar Ranking & Patentes'}</span>
+                  <span className="text-[10px] opacity-80 font-normal bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20">
+                    Auto 1m
+                  </span>
+                </button>
+                <button 
                   onClick={() => handleResetWeek()}
                   className="px-4 py-2.5 bg-gold/15 hover:bg-gold/25 text-gold border border-gold/30 hover:border-gold/50 rounded-xl font-bold transition-all text-xs flex items-center justify-center gap-2 shadow-sm"
                   title="Distribui os prêmios da semana e reinicia o ranking semanal"
@@ -1568,15 +1724,15 @@ export function GamificationManager() {
         <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-gold flex items-center gap-2">
-              <Target className="w-4 h-4 text-gold" /> Requisitos de Pontos (Níveis)
+              <Target className="w-4 h-4 text-gold" /> Requisitos de Pontos e Prêmios por Patente
             </h3>
-            <p className="text-sm text-white/60 mt-1">Configure a quantidade de pontos necessários para atingir cada nível.</p>
+            <p className="text-sm text-white/60 mt-1">Configure as metas de pontos e edite os prêmios exclusivos de cada patente do clube.</p>
           </div>
           <button
             onClick={handleSyncAllRankBonuses}
             disabled={isSyncingRankBonuses}
             className="flex items-center gap-2 bg-gold/15 hover:bg-gold/25 text-gold border border-gold/30 px-4 py-2 rounded-xl font-bold transition-all text-sm shrink-0"
-            title="Verifica todos os clientes e concede os bônus dos níveis que já alcançaram"
+            title="Verifica todos os clientes e concede os prêmios configurados das patentes que já alcançaram"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncingRankBonuses ? 'animate-spin' : ''}`} />
             {isSyncingRankBonuses ? 'Sincronizando...' : 'Sincronizar Bônus por Nível'}
@@ -1586,45 +1742,130 @@ export function GamificationManager() {
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3.5 mb-6 flex items-start gap-3">
           <Sparkles className="w-5 h-5 text-gold shrink-0 mt-0.5" />
           <div className="text-xs text-white/80 leading-relaxed">
-            <strong className="text-gold">Bônus Concedidos por Meta Atingida:</strong> Os bônus agora são creditados no perfil do cliente imediatamente no momento em que ele atinge a pontuação de cada rank (não mais apenas no fim da temporada).
+            <strong className="text-gold">Prêmios Concedidos por Meta Atingida:</strong> Os bônus e prêmios são creditados automaticamente no perfil do cliente assim que ele atinge a pontuação da patente. Clique em <strong>"Editar Prêmios"</strong> em qualquer patente para alterar benefícios (Horas VIP, Pontos, Picolé, 50% OFF ou recompensas personalizadas).
           </div>
         </div>
         
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
           {[ 
-            { name: 'Iniciante', bonus: 'Sem bônus' },
-            { name: 'Bronze', bonus: '1 Picolé Grátis' },
-            { name: 'Prata', bonus: '1h VIP' },
-            { name: 'Ouro', bonus: '1h VIP + 5k pts' },
-            { name: 'Platina', bonus: '3h VIP' },
-            { name: 'Diamante', bonus: '50% OFF' },
-            { name: 'Elite', bonus: '50% OFF' },
-            { name: 'Lenda', bonus: '50% OFF' }
-          ].map((item, idx) => (
-            <div key={idx} className="space-y-1.5 p-3 rounded-xl bg-black/20 border border-white/5">
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] font-bold uppercase text-white/50 tracking-widest">{item.name}</label>
-                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
-                  item.bonus.includes('OFF') ? 'bg-purple-500/20 text-purple-300' :
-                  item.bonus.includes('VIP') ? 'bg-gold/20 text-gold' :
-                  'bg-white/5 text-white/40'
-                }`}>
-                  {item.bonus}
-                </span>
+            { name: 'Iniciante', level: 1 },
+            { name: 'Bronze', level: 2 },
+            { name: 'Prata', level: 3 },
+            { name: 'Ouro', level: 4 },
+            { name: 'Platina', level: 5 },
+            { name: 'Diamante', level: 6 },
+            { name: 'Elite', level: 7 },
+            { name: 'Lenda', level: 8 }
+          ].map((item, idx) => {
+            const lvl = item.level;
+            const tierTheme = getTierTheme(lvl);
+            const tierBonuses = rankBonuses.filter(b => b.level === lvl);
+            
+            return (
+              <div key={idx} className="space-y-2.5 p-3.5 rounded-2xl bg-black/30 border border-white/10 hover:border-gold/30 transition-all flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2.5 h-2.5 rounded-full ${tierTheme.bg}`} />
+                      <label className="text-xs font-bold uppercase text-white tracking-wider">{item.name}</label>
+                    </div>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${tierTheme.bg} bg-opacity-20 ${tierTheme.text} border border-current border-opacity-30`}>
+                      Nível {lvl}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1 mb-3">
+                    <label className="text-[10px] font-semibold uppercase text-white/40 tracking-wider">
+                      Meta de Pontos
+                    </label>
+                    <input 
+                      type="number" 
+                      value={tierThresholds[idx] ?? 0}
+                      disabled={idx === 0}
+                      onChange={(e) => {
+                        const newThresholds = [...tierThresholds];
+                        newThresholds[idx] = parseInt(e.target.value) || 0;
+                        setTierThresholds(newThresholds);
+                      }}
+                      className={`w-full bg-black/50 border ${idx === 0 ? 'border-white/5 opacity-50' : 'border-white/10'} rounded-xl py-2 px-3 text-white font-mono font-bold focus:outline-none focus:border-gold/50 text-xs`}
+                    />
+                  </div>
+
+                  {/* Resumo dos Prêmios */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase text-white/40 tracking-wider flex items-center justify-between">
+                      <span>Prêmio(s) da Patente</span>
+                    </span>
+                    <div className="min-h-[44px] flex flex-wrap items-center gap-1.5 p-2 rounded-xl bg-black/40 border border-white/5">
+                      {tierBonuses.length === 0 ? (
+                        <span className="text-[11px] text-amber-300/80 font-semibold px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/20 italic">
+                          Sem bônus
+                        </span>
+                      ) : (
+                        tierBonuses.map((b, bIdx) => (
+                          <span 
+                            key={bIdx}
+                            className={`text-[10px] font-bold pl-2 pr-1.5 py-0.5 rounded-lg border flex items-center gap-1.5 shadow-sm ${
+                              b.type === 'points' ? 'bg-gold/15 text-gold border-gold/30' :
+                              b.type === 'vip_hours' ? 'bg-teal-500/15 text-teal-300 border-teal-500/30' :
+                              b.type === 'discount_50' ? 'bg-purple-500/15 text-purple-300 border-purple-500/30' :
+                              b.type === 'popsicle' ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                              b.type === 'unlimited_vip' ? 'bg-red-500/15 text-red-300 border-red-500/30' :
+                              'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                            }`}
+                            title={b.title}
+                          >
+                            <span>
+                              {b.type === 'vip_hours' ? `${b.totalHours || 1}h VIP` :
+                               b.type === 'points' ? `+${(b.bonusPoints || 0).toLocaleString('pt-BR')} pts` :
+                               b.type === 'discount_50' ? '50% OFF' :
+                               b.type === 'popsicle' ? '1 Picolé' :
+                               b.type === 'unlimited_vip' ? 'VIP Ilimitado' :
+                               b.title.replace(`Bônus Patente ${item.name} `, '').replace(/[()]/g, '')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteSingleBonus(b, item.name);
+                              }}
+                              className="text-white/40 hover:text-red-400 p-0.5 rounded hover:bg-black/40 transition-colors"
+                              title={`Excluir "${b.title}" da patente ${item.name}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingTierForBonus(lvl)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gold/10 hover:bg-gold/20 text-gold border border-gold/30 hover:border-gold/50 text-xs font-bold transition-all shadow-sm group"
+                  >
+                    <Gift className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                    <span>{tierBonuses.length === 0 ? '+ Adicionar Prêmio' : 'Editar Prêmios'}</span>
+                  </button>
+
+                  {tierBonuses.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleQuickSetNoBonus(lvl, item.name)}
+                      className="flex items-center justify-center gap-1 py-2 px-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all shadow-sm shrink-0"
+                      title={`Definir a patente ${item.name} como sem bônus (excluir todos)`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Sem Bônus</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <input 
-                type="number" 
-                value={tierThresholds[idx] ?? 0}
-                disabled={idx === 0}
-                onChange={(e) => {
-                  const newThresholds = [...tierThresholds];
-                  newThresholds[idx] = parseInt(e.target.value) || 0;
-                  setTierThresholds(newThresholds);
-                }}
-                className={`w-full bg-black/40 border ${idx === 0 ? 'border-white/5 opacity-50' : 'border-white/10'} rounded-xl py-2.5 px-3 text-white focus:outline-none focus:border-gold/50 text-sm`}
-              />
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <button 
@@ -1632,7 +1873,7 @@ export function GamificationManager() {
             disabled={isSavingSeason}
             className="btn-primary"
           >
-            {isSavingSeason ? 'Salvando...' : 'Salvar Níveis'}
+            {isSavingSeason ? 'Salvando...' : 'Salvar Níveis e Prêmios'}
           </button>
         </div>
       </div>
@@ -2189,6 +2430,35 @@ export function GamificationManager() {
       onClientUpdated={(updated) => {
         setClients(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
       }}
+    />
+  )}
+
+  {/* Modal de Edição de Prêmios da Patente */}
+  {editingTierForBonus !== null && (
+    <EditRankBonusModal
+      isOpen={true}
+      onClose={() => setEditingTierForBonus(null)}
+      tierLevel={editingTierForBonus}
+      tierName={getTierName(editingTierForBonus)}
+      currentBonuses={rankBonuses.filter(b => b.level === editingTierForBonus)}
+      clientCount={clients.filter(c => {
+        const peak = Math.max(
+          0,
+          c.seasonHighestPoints ?? 0,
+          c.highestSeasonalPoints ?? 0,
+          c.seasonalPoints ?? 0,
+          c.points ?? 0
+        );
+        const calculatedTier = getLevelTier(peak, tierThresholds, 1);
+        const clientLvl = Math.max(
+          c.seasonHighestTierLevel ?? 1,
+          c.highestTierLevel ?? 1,
+          c.manualTierLevel ?? 1,
+          calculatedTier.tierLevel
+        );
+        return clientLvl >= editingTierForBonus;
+      }).length}
+      onSave={handleSaveTierBonuses}
     />
   )}
 </div>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { DEFAULT_THRESHOLDS } from '../utils/tierSystem';
+import { DEFAULT_RANK_BONUSES, RankBonusDefinition, getActiveRankBonuses, setActiveRankBonuses } from '../utils/bonusSystem';
 
 export interface RewardItem {
   id: string;
@@ -62,6 +63,7 @@ export const DEFAULT_REWARDS: RewardItem[] = [
 export function useGamificationSettings() {
   const [thresholds, setThresholds] = useState<number[]>(DEFAULT_THRESHOLDS);
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
+  const [rankBonuses, setRankBonuses] = useState<RankBonusDefinition[]>(getActiveRankBonuses() || DEFAULT_RANK_BONUSES);
   const [seasonStartDate, setSeasonStartDate] = useState<string>('');
   const [seasonDurationMonths, setSeasonDurationMonths] = useState<number>(3);
   const [currentSeasonNumber, setCurrentSeasonNumber] = useState<number>(1);
@@ -80,6 +82,10 @@ export function useGamificationSettings() {
         }
         if (data.rewards && Array.isArray(data.rewards)) {
           setRewards(data.rewards);
+        }
+        if (data.rankBonuses && Array.isArray(data.rankBonuses)) {
+          setRankBonuses(data.rankBonuses);
+          setActiveRankBonuses(data.rankBonuses);
         }
         if (data.seasonStartDate) {
           setSeasonStartDate(data.seasonStartDate);
@@ -118,6 +124,7 @@ export function useGamificationSettings() {
     thresholds,
     tierThresholds: thresholds,
     rewards, 
+    rankBonuses,
     seasonStartDate, 
     seasonDurationMonths, 
     currentSeasonNumber,

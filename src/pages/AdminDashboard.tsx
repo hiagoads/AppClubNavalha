@@ -18,6 +18,7 @@ import { formatTime, parsePrice, parseServiceString, stringifyServices, parsePho
 import { checkAndSyncClientRankBonuses } from '../utils/bonusSystem';
 import { getClientTier, DEFAULT_THRESHOLDS } from '../utils/tierSystem';
 import { useGamificationSettings } from '../hooks/useGamificationSettings';
+import { useGamificationAutoSync } from '../hooks/useGamificationAutoSync';
 import { 
   Play, 
   Pause,
@@ -69,6 +70,7 @@ export default function AdminDashboard() {
   const { breaks } = useBreaks();
   const { isOpen, toggleOpenStatus, schedulingFee } = useSettings();
   const { thresholds } = useGamificationSettings();
+  useGamificationAutoSync({ enabled: true, intervalMs: 60000 });
   const queueTimers = useQueueTimers(activeBookings, queue, services, breaks, barbers);
   const { isProcessing, withProcessing } = useProcessing();
   const { activeRemainingMinutes, queueWaitTimes, queueIntervals, sortedQueue, exactStartTimes } = queueTimers;
@@ -396,7 +398,7 @@ export default function AdminDashboard() {
             }
           }
 
-          // 2. Fallback to phone number query if not matched by clientId
+          // 2. Fallback to phone number or name query if not matched by clientId
           if (!clientDoc && activeInfo.clientWhatsapp) {
             const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
             if (cleanPhone) {
@@ -406,7 +408,39 @@ export default function AdminDashboard() {
               if (!snapshot.empty) {
                 clientDoc = snapshot.docs[0];
                 clientData = clientDoc.data();
+              } else {
+                // Tenta carregar todos os clientes e fazer matching flexível (por dígitos de telefone ou nome)
+                const allSnap = await getDocs(clientsRef);
+                const found = allSnap.docs.find(d => {
+                  const data = d.data();
+                  const cPhone = (data.whatsapp || '').replace(/\D/g, '');
+                  if (cPhone && (cPhone === cleanPhone || cPhone.endsWith(cleanPhone) || cleanPhone.endsWith(cPhone))) {
+                    return true;
+                  }
+                  if (activeInfo.clientName && data.username) {
+                    return data.username.trim().toLowerCase() === activeInfo.clientName.trim().toLowerCase();
+                  }
+                  return false;
+                });
+                if (found) {
+                  clientDoc = found;
+                  clientData = found.data();
+                }
               }
+            }
+          }
+
+          // 3. Fallback adicional por nome se não tiver whatsapp
+          if (!clientDoc && activeInfo.clientName) {
+            const clientsRef = collection(db, 'clients');
+            const allSnap = await getDocs(clientsRef);
+            const found = allSnap.docs.find(d => {
+              const data = d.data();
+              return data.username && data.username.trim().toLowerCase() === activeInfo.clientName.trim().toLowerCase();
+            });
+            if (found) {
+              clientDoc = found;
+              clientData = found.data();
             }
           }
         } catch (e) {

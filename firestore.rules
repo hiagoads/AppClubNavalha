@@ -22,7 +22,7 @@ service cloud.firestore {
     }
 
     match /point_transactions/{transactionId} {
-      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == resource.data.clientId);
+      allow read: if isSignedIn();
       allow write: if isAdmin();
     }
     match /redemptions/{redemptionId} {

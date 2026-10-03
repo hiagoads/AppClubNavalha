@@ -243,6 +243,34 @@ export const getClientTier = (
 };
 
 /**
+ * Converte com segurança qualquer formato de data (Timestamp do Firestore, ISO string, Date, epoch ms)
+ * para milissegundos numéricos. Nunca retorna NaN.
+ */
+export function parseDateToMs(val: any): number {
+  if (!val) return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  if (val instanceof Date) return isNaN(val.getTime()) ? 0 : val.getTime();
+  if (typeof val.toDate === 'function') {
+    try {
+      const d = val.toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d.getTime() : 0;
+    } catch {
+      return 0;
+    }
+  }
+  if (typeof val.seconds === 'number') {
+    return val.seconds * 1000;
+  }
+  if (typeof val === 'string') {
+    const parsed = Date.parse(val);
+    if (!isNaN(parsed)) return parsed;
+    const d = new Date(val).getTime();
+    return isNaN(d) ? 0 : d;
+  }
+  return 0;
+}
+
+/**
  * Critérios Oficiais de Ordenação e Desempate do Ranking do Clube:
  * 1º Critério: Pontuação da Semana / Período (weeklyPoints maior)
  * 2º Critério (Desempate 1): Quem atingiu a pontuação primeiro (lastPointsUpdate / data do último serviço mais antiga)
@@ -250,8 +278,12 @@ export const getClientTier = (
  * 4º Critério (Fallback): Ordem alfabética pelo nome de usuário
  */
 export const compareClientsForRanking = (a: any, b: any): number => {
-  const ptsA = a.weeklyPoints ?? a.seasonalPoints ?? a.points ?? 0;
-  const ptsB = b.weeklyPoints ?? b.seasonalPoints ?? b.points ?? 0;
+  const getWeeklyScore = (c: any) => {
+    if (typeof c.weeklyPoints === 'number') return Math.max(0, c.weeklyPoints);
+    return Math.max(0, c.seasonalPoints || c.points || 0);
+  };
+  const ptsA = getWeeklyScore(a);
+  const ptsB = getWeeklyScore(b);
 
   // 1º Critério: Mais pontos primeiro
   if (ptsB !== ptsA) {
@@ -259,14 +291,10 @@ export const compareClientsForRanking = (a: any, b: any): number => {
   }
 
   // 2º Critério: Quem atingiu a pontuação primeiro (timestamp mais antigo leva vantagem)
-  const timeA = a.lastPointsUpdate 
-    ? new Date(a.lastPointsUpdate).getTime() 
-    : (a.updatedAt ? new Date(a.updatedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : Infinity));
-  const timeB = b.lastPointsUpdate 
-    ? new Date(b.lastPointsUpdate).getTime() 
-    : (b.updatedAt ? new Date(b.updatedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : Infinity));
+  const timeA = parseDateToMs(a.lastPointsUpdate) || parseDateToMs(a.updatedAt) || parseDateToMs(a.createdAt) || Infinity;
+  const timeB = parseDateToMs(b.lastPointsUpdate) || parseDateToMs(b.updatedAt) || parseDateToMs(b.createdAt) || Infinity;
 
-  if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
+  if (timeA !== Infinity && timeB !== Infinity && timeA !== timeB) {
     return timeA - timeB; // Menor timestamp = data/hora anterior = alcançou primeiro
   }
 

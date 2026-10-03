@@ -591,25 +591,26 @@ export default function ClientPanel() {
           </div>
         )})()}
 
-        {/* Botão de Acesso Rápido ao Ranking Semanal & Pódio Comprovado */}
-        <div className="mx-2 sm:mx-0">
+        {/* Botão de Acesso Rápido ao Ranking Semanal & Pódio */}
+        <div className="mx-2 sm:mx-0 mb-4">
           <button
+            type="button"
             onClick={() => setShowRanking(true)}
-            className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-gradient-to-r from-gold/20 via-black/50 to-gold/10 border border-gold/30 hover:border-gold/60 text-left transition-all group shadow-lg shadow-black/40 overflow-hidden"
+            className="w-full flex items-center justify-between p-3 sm:p-3.5 rounded-2xl bg-gradient-to-r from-gold/20 via-black/60 to-gold/10 border border-gold/30 hover:border-gold/60 text-left transition-all group shadow-lg shadow-black/40 overflow-hidden"
           >
-            <div className="flex items-center gap-3 min-w-0 flex-1 pr-2">
-              <div className="w-10 h-10 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold group-hover:scale-105 transition-transform shrink-0">
-                <Trophy className="w-5 h-5 text-gold" />
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 overflow-hidden pr-2">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold group-hover:scale-105 transition-transform shrink-0">
+                <Trophy className="w-4 h-4 sm:w-5 sm:h-5 text-gold" />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <p className="text-xs font-bold text-white">
-                    Ranking Semanal & Pódio
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+                  <p className="text-xs sm:text-sm font-bold text-white truncate">
+                    Acompanhar Ranking & Pódio
                   </p>
                   <Crown className="w-3.5 h-3.5 text-gold shrink-0" />
                 </div>
-                <p className="text-[11px] text-white/50 truncate">
-                  Veja a disputa e os ganhadores comprovados
+                <p className="text-[10px] sm:text-[11px] text-white/60 truncate mt-0.5">
+                  Veja a disputa e os ganhadores da semana
                 </p>
               </div>
             </div>

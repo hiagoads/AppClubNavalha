@@ -5,9 +5,10 @@ import {
   ChevronDown, ChevronUp, History, Sparkles, Gift, User 
 } from 'lucide-react';
 import { db } from '../../lib/firebase';
-import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { getLevelTier, getClientTier, compareClientsForRanking } from '../../utils/tierSystem';
+import { collection, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
+import { getLevelTier, getClientTier, compareClientsForRanking, parseDateToMs } from '../../utils/tierSystem';
 import { useGamificationSettings } from '../../hooks/useGamificationSettings';
+import { reconcileAllClientsPointsAndTiers, getCurrentWeekWindow } from '../../utils/pointsReconciler';
 import { PastSeason, PastWeek, SeasonPodiumMember } from '../../types';
 
 interface RankingModalProps {
@@ -39,47 +40,69 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
   } = useGamificationSettings();
 
   useEffect(() => {
-    if (isOpen) {
-      loadCurrentRanking();
-      loadPastHistory();
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
 
-  const loadCurrentRanking = async () => {
+    loadPastHistory();
+
+    // 1. Dispara verificação e reconciliação em background para garantir que nenhum cliente fique fora
+    reconcileAllClientsPointsAndTiers({
+      thresholds,
+      lastWeekClosedAt
+    }).catch(console.warn);
+
+    // 2. Escuta em tempo real da coleção clients (SEM LIMITES ARBITRÁRIOS)
     setLoading(true);
-    try {
-      // Carregamos os competidores da semana/temporada
-      const q = query(
-        collection(db, 'clients'),
-        limit(50)
-      );
-      const snap = await getDocs(q);
+    const unsubClients = onSnapshot(collection(db, 'clients'), (snap) => {
       const allClients = snap.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      // Filtra apenas quem possui pontuação na semana ou temporada
-      const activeCompetitors = allClients.filter(
-        (c: any) => (c.weeklyPoints || 0) > 0 || (c.seasonalPoints || 0) > 0 || (c.points || 0) > 0
-      );
+      // Janela da semana atual (atenta à data dos créditos/débitos)
+      const { startTime } = getCurrentWeekWindow(lastWeekClosedAt);
+      const weekStartMs = startTime.getTime();
+
+      // Filtra competidores da semana:
+      // O cliente deve ter weeklyPoints > 0 OU pontuado nesta semana (lastPointsUpdate >= weekStartMs)
+      const activeCompetitors = allClients.filter((c: any) => {
+        const weekly = c.weeklyPoints ?? 0;
+        if (weekly > 0) return true;
+        const lastUpdateMs = parseDateToMs(c.lastPointsUpdate) || parseDateToMs(c.updatedAt);
+        if (lastUpdateMs >= weekStartMs && ((c.seasonalPoints || 0) > 0 || (c.points || 0) > 0)) {
+          return true;
+        }
+        return false;
+      });
 
       // Aplica a ordenação oficial com os 3 critérios de desempate
       activeCompetitors.sort(compareClientsForRanking);
 
       // Atribui posições com base na ordem desempatada
-      const rankedData = activeCompetitors.slice(0, 25).map((client, index) => ({
+      const rankedData = activeCompetitors.map((client, index) => ({
         ...client,
         position: index + 1
       }));
 
       setRanking(rankedData);
-    } catch (e: any) {
-      if (e.code !== 'permission-denied') console.error(e);
-    } finally {
       setLoading(false);
-    }
-  };
+    }, (err) => {
+      if (err.code !== 'permission-denied') console.error('Erro no ranking em tempo real:', err);
+      setLoading(false);
+    });
+
+    // 3. Verificação periódica a cada minuto enquanto o modal de ranking estiver aberto
+    const intervalId = setInterval(() => {
+      reconcileAllClientsPointsAndTiers({
+        thresholds,
+        lastWeekClosedAt
+      }).catch(console.warn);
+    }, 60000);
+
+    return () => {
+      unsubClients();
+      clearInterval(intervalId);
+    };
+  }, [isOpen, thresholds, lastWeekClosedAt]);
 
   const loadPastHistory = async () => {
     setLoadingHistory(true);
@@ -397,9 +420,15 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
               <div className="space-y-1 px-1 pt-1">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 flex items-center gap-2">
-                    <Crown className="w-4 h-4 text-gold" /> Classificação Geral
+                    <Crown className="w-4 h-4 text-gold" /> Classificação Semanal
                   </h3>
-                  <span className="text-xs text-white/40">{ranking.length} competidores</span>
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Ao Vivo (1 min)
+                    </span>
+                    <span className="text-xs text-white/40">{ranking.length} competidores</span>
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5 text-[10px] text-white/40 bg-white/[0.03] px-2.5 py-1 rounded-lg border border-white/5">
                   <Sparkles className="w-3 h-3 text-gold/70 shrink-0" />
@@ -433,7 +462,9 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                     const isFirst = client.position === 1;
                     const isSecond = client.position === 2;
                     const isThird = client.position === 3;
-                    const displayPoints = client.weeklyPoints ?? client.seasonalPoints ?? client.points ?? 0;
+                    const displayPoints = typeof client.weeklyPoints === 'number'
+                      ? Math.max(0, client.weeklyPoints)
+                      : (client.seasonalPoints || client.points || 0);
                     const tier = getClientTier(client, thresholds);
                     
                     return (

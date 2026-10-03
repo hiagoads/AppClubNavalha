@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc, increment, addDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, increment, addDoc, collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, getActiveThresholds } from './tierSystem';
 import { ClientBonus } from '../types';
@@ -56,12 +56,13 @@ export interface RankBonusDefinition {
   tierName: string;
   rankKey: string;
   title: string;
-  type: 'vip_hours' | 'discount_50' | 'unlimited_vip' | 'popsicle' | 'points';
+  type: 'vip_hours' | 'discount_50' | 'unlimited_vip' | 'popsicle' | 'points' | 'custom';
   totalHours?: number;
   bonusPoints?: number;
+  description?: string;
 }
 
-export const RANK_BONUSES_CONFIG: RankBonusDefinition[] = [
+export const DEFAULT_RANK_BONUSES: RankBonusDefinition[] = [
   {
     level: 2,
     tierName: 'Bronze',
@@ -124,9 +125,59 @@ export const RANK_BONUSES_CONFIG: RankBonusDefinition[] = [
   },
 ];
 
+export const RANK_BONUSES_CONFIG: RankBonusDefinition[] = DEFAULT_RANK_BONUSES;
+
+const getInitialRankBonuses = (): RankBonusDefinition[] => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = localStorage.getItem('barbearia_rank_bonuses');
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch (e) {}
+  return [...DEFAULT_RANK_BONUSES];
+};
+
+let activeRankBonuses: RankBonusDefinition[] = getInitialRankBonuses();
+
+try {
+  onSnapshot(doc(db, 'settings', 'gamification'), (docSnap) => {
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (Array.isArray(data.rankBonuses)) {
+        activeRankBonuses = data.rankBonuses;
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            localStorage.setItem('barbearia_rank_bonuses', JSON.stringify(activeRankBonuses));
+          }
+        } catch (e) {}
+      }
+    }
+  }, (err) => {
+    if (err.code !== 'permission-denied') console.warn('Error syncing active rank bonuses:', err);
+  });
+} catch (e) {
+  console.warn('Failed to attach rankBonuses listener:', e);
+}
+
+export const getActiveRankBonuses = (): RankBonusDefinition[] => activeRankBonuses;
+export const setActiveRankBonuses = (bonuses: RankBonusDefinition[]) => {
+  if (Array.isArray(bonuses)) {
+    activeRankBonuses = [...bonuses];
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('barbearia_rank_bonuses', JSON.stringify(activeRankBonuses));
+      }
+    } catch (e) {}
+  }
+};
+
 export function getEligibleRankBonuses(
   clientData: any,
-  thresholds: number[] = DEFAULT_THRESHOLDS
+  thresholds: number[] = DEFAULT_THRESHOLDS,
+  customRankBonuses?: RankBonusDefinition[]
 ) {
   if (!clientData) return { toAddBonuses: [], pointsToAdd: 0, currentLevel: 1 };
 
@@ -142,7 +193,11 @@ export function getEligibleRankBonuses(
   const toAddBonuses: ClientBonus[] = [];
   let pointsToAdd = 0;
 
-  for (const cfg of RANK_BONUSES_CONFIG) {
+  const bonusesConfig = Array.isArray(customRankBonuses) 
+    ? customRankBonuses 
+    : (Array.isArray(activeRankBonuses) ? activeRankBonuses : DEFAULT_RANK_BONUSES);
+
+  for (const cfg of bonusesConfig) {
     if (currentTierLevel >= cfg.level) {
       const alreadyHas = existingBonuses.some((b) => {
         if (b.rankKey && b.rankKey === cfg.rankKey) return true;
@@ -160,11 +215,11 @@ export function getEligibleRankBonuses(
           id: crypto.randomUUID(),
           rankKey: cfg.rankKey,
           title: cfg.title,
-          type: cfg.type,
+          type: cfg.type as any,
           category: 'rank_level',
           createdAt: new Date().toISOString(),
           ...(cfg.totalHours ? { totalHours: cfg.totalHours, usedHours: 0 } : {}),
-          ...(cfg.type === 'discount_50' || cfg.type === 'popsicle' ? { isRedeemed: false } : {}),
+          ...(cfg.type === 'discount_50' || cfg.type === 'popsicle' || cfg.type === 'custom' || cfg.type === 'unlimited_vip' ? { isRedeemed: false } : {}),
           ...(cfg.type === 'points' ? { isRedeemed: true } : {})
         });
 
@@ -183,22 +238,34 @@ const syncingClients = new Set<string>();
 export async function checkAndSyncClientRankBonuses(
   clientId: string,
   clientData: any,
-  thresholds?: number[]
+  thresholds?: number[],
+  customRankBonuses?: RankBonusDefinition[]
 ) {
   if (!clientId || !clientData) return null;
   if (syncingClients.has(clientId)) return null;
 
   let activeThresholds = thresholds;
-  if (!activeThresholds || activeThresholds.length < 8) {
+  let rankBonusesToUse = customRankBonuses;
+  if (!activeThresholds || activeThresholds.length < 8 || rankBonusesToUse === undefined) {
     try {
       const settingsDoc = await getDoc(doc(db, 'settings', 'gamification'));
-      if (settingsDoc.exists() && Array.isArray(settingsDoc.data().tierThresholds)) {
-        activeThresholds = settingsDoc.data().tierThresholds;
+      if (settingsDoc.exists()) {
+        const data = settingsDoc.data();
+        if (!activeThresholds && Array.isArray(data.tierThresholds)) {
+          activeThresholds = data.tierThresholds;
+        }
+        if (rankBonusesToUse === undefined && Array.isArray(data.rankBonuses)) {
+          rankBonusesToUse = data.rankBonuses;
+        }
       }
     } catch {
       // fallback
     }
   }
+
+  const effectiveRankBonuses = Array.isArray(rankBonusesToUse) 
+    ? rankBonusesToUse 
+    : (Array.isArray(activeRankBonuses) ? activeRankBonuses : DEFAULT_RANK_BONUSES);
 
   syncingClients.add(clientId);
   try {
@@ -242,7 +309,8 @@ export async function checkAndSyncClientRankBonuses(
 
     const { toAddBonuses, pointsToAdd, currentLevel } = getEligibleRankBonuses(
       freshData,
-      activeThresholds || getActiveThresholds()
+      activeThresholds || getActiveThresholds(),
+      effectiveRankBonuses
     );
 
     if (toAddBonuses.length === 0 && pointsToAdd === 0) {

@@ -91,13 +91,24 @@ export interface ClientBonus {
   id: string;
   rankKey?: string;
   title: string;
-  type: 'unlimited_vip' | 'vip_hours' | 'popsicle' | 'discount_50' | 'points';
+  type: 'unlimited_vip' | 'vip_hours' | 'popsicle' | 'discount_50' | 'points' | 'custom';
   category?: 'weekly_podium' | 'rank_level' | 'special';
   totalHours?: number; // For vip_hours
   usedHours?: number; // For vip_hours
   isRedeemed?: boolean; // For single-use bonuses
   createdAt: string;
   expiresAt?: string; // Data/hora limite de expiração (ex: 7 dias / próximo fechamento)
+}
+
+export interface RankBonusDefinition {
+  level: number;
+  tierName: string;
+  rankKey: string;
+  title: string;
+  type: 'vip_hours' | 'discount_50' | 'unlimited_vip' | 'popsicle' | 'points' | 'custom';
+  totalHours?: number;
+  bonusPoints?: number;
+  description?: string;
 }
 
 export interface SeasonPodiumMember {

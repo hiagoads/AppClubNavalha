@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { X, Award, Clock, Star, Gift, Scissors, Gamepad2, History, User, CheckCircle2 } from 'lucide-react';
 import { ClientProfile, VipStation } from '../../types';
-import { getLevelTier, getClientTier } from '../../utils/tierSystem';
+import { getLevelTier, getClientTier, getTierName } from '../../utils/tierSystem';
 import { useGamificationSettings, RewardItem } from '../../hooks/useGamificationSettings';
 import { checkAndSyncClientRankBonuses, isBonusExpired, isBonusActive } from '../../utils/bonusSystem';
 import { ClientActiveGameCard } from '../vip/ClientActiveGameCard';
@@ -36,12 +36,43 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
   const [confirmBonus, setConfirmBonus] = useState<any | null>(null);
   const [bonusHoursToUse, setBonusHoursToUse] = useState(1);
   const [activeVipStation, setActiveVipStation] = useState<VipStation | null>(null);
-  const { thresholds, rewards } = useGamificationSettings();
+  const { thresholds, rewards, rankBonuses } = useGamificationSettings();
+
+  const rankBonusSummary = React.useMemo(() => {
+    if (!rankBonuses || rankBonuses.length === 0) {
+      return 'Bronze, Prata, Ouro, Platina e Diamante';
+    }
+    const tiers = [
+      { level: 2, name: 'Bronze' },
+      { level: 3, name: 'Prata' },
+      { level: 4, name: 'Ouro' },
+      { level: 5, name: 'Platina' },
+      { level: 6, name: 'Diamante' },
+      { level: 7, name: 'Elite' },
+      { level: 8, name: 'Lenda' },
+    ];
+    const parts: string[] = [];
+    tiers.forEach(t => {
+      const bonusesForTier = rankBonuses.filter(b => b.level === t.level);
+      if (bonusesForTier.length > 0) {
+        const text = bonusesForTier.map(b => {
+          if (b.type === 'vip_hours') return `${b.totalHours || 1}h VIP`;
+          if (b.type === 'points') return `+${(b.bonusPoints || 0).toLocaleString('pt-BR')} pts`;
+          if (b.type === 'popsicle') return '1 Picolé Grátis';
+          if (b.type === 'discount_50') return '50% OFF';
+          if (b.type === 'unlimited_vip') return 'VIP Ilimitado';
+          return b.title.replace(new RegExp(`Bônus Patente ${t.name}\\s*`, 'i'), '').replace(/[()]/g, '').trim() || b.title;
+        }).join(' + ');
+        parts.push(`${t.name}: ${text}`);
+      }
+    });
+    return parts.length > 0 ? parts.join(', ') : 'Prêmios exclusivos';
+  }, [rankBonuses]);
 
   useEffect(() => {
     if (!isOpen || !clientProfile) return;
 
-    checkAndSyncClientRankBonuses(clientProfile.id, clientProfile, thresholds);
+    checkAndSyncClientRankBonuses(clientProfile.id, clientProfile, thresholds, rankBonuses);
 
     const qR = query(collection(db, 'redemptions'), where('clientId', '==', clientProfile.id));
     const unsubR = onSnapshot(qR, (snap) => {
@@ -366,7 +397,7 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
                 <h3 className="text-xs uppercase tracking-widest text-gold font-bold">Bônus por Nível</h3>
               </div>
               <p className="text-[11px] text-white/60 leading-relaxed">
-                Ao atingir a pontuação de cada rank (Bronze: 1 Picolé Grátis, Prata: 1h VIP, Ouro: 1h VIP + 5.000 pts, Platina: 3h VIP, Diamante+: 50% OFF), seus bônus serão liberados aqui automaticamente para uso!
+                Ao atingir a pontuação de cada patente ({rankBonusSummary}), seus prêmios serão liberados aqui automaticamente para resgate!
               </p>
             </div>
           )}
