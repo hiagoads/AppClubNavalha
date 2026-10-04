@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   X, Trophy, Calendar, Clock, Crown, Users, Zap, 
-  ChevronDown, ChevronUp, History, Sparkles, Gift, User 
+  ChevronDown, ChevronUp, History, Sparkles, Gift, User, RefreshCw 
 } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { collection, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
 import { getLevelTier, getClientTier, compareClientsForRanking, parseDateToMs } from '../../utils/tierSystem';
 import { useGamificationSettings } from '../../hooks/useGamificationSettings';
-import { reconcileAllClientsPointsAndTiers, getCurrentWeekWindow } from '../../utils/pointsReconciler';
+import { reconcileAllClientsPointsAndTiers, getCurrentWeekWindow, recalculateAndRestoreWeeklyRanking } from '../../utils/pointsReconciler';
 import { PastSeason, PastWeek, SeasonPodiumMember } from '../../types';
 
 interface RankingModalProps {
@@ -29,6 +29,7 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
   const [expandedSeasonId, setExpandedSeasonId] = useState<string | null>(null);
   const [expandedWeekId, setExpandedWeekId] = useState<string | null>(null);
   const [showLastWeekPodium, setShowLastWeekPodium] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { 
     thresholds, 
@@ -39,18 +40,23 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
     lastWeekClosedAt
   } = useGamificationSettings();
 
+  const handleRefreshRanking = async () => {
+    setIsRefreshing(true);
+    try {
+      await recalculateAndRestoreWeeklyRanking({ thresholds });
+    } catch (err) {
+      console.warn('Erro ao atualizar ranking no modal:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
 
     loadPastHistory();
 
-    // 1. Dispara verificação e reconciliação em background para garantir que nenhum cliente fique fora
-    reconcileAllClientsPointsAndTiers({
-      thresholds,
-      lastWeekClosedAt
-    }).catch(console.warn);
-
-    // 2. Escuta em tempo real da coleção clients (SEM LIMITES ARBITRÁRIOS)
+    // 1. Escuta em tempo real da coleção clients (SEM LIMITES ARBITRÁRIOS)
     setLoading(true);
     const unsubClients = onSnapshot(collection(db, 'clients'), (snap) => {
       const allClients = snap.docs.map(doc => ({
@@ -90,17 +96,8 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
       setLoading(false);
     });
 
-    // 3. Verificação periódica a cada minuto enquanto o modal de ranking estiver aberto
-    const intervalId = setInterval(() => {
-      reconcileAllClientsPointsAndTiers({
-        thresholds,
-        lastWeekClosedAt
-      }).catch(console.warn);
-    }, 60000);
-
     return () => {
       unsubClients();
-      clearInterval(intervalId);
     };
   }, [isOpen, thresholds, lastWeekClosedAt]);
 
@@ -141,11 +138,12 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
 
   if (!isOpen) return null;
 
-  // Pódio oficial da semana anterior: prioriza lastWeekPodium de settings, com fallback para o último registro de past_weeks
+  // Pódio oficial da semana anterior: prioriza lastWeekPodium de settings se tiver pontuação legítima (>0)
+  const hasRealPodiumPoints = (lastWeekPodium && lastWeekPodium.length > 0 && lastWeekPodium.some((p: any) => (p.points || 0) > 0));
   const activePastWeekPodium: SeasonPodiumMember[] = 
-    (lastWeekPodium && lastWeekPodium.length > 0)
+    hasRealPodiumPoints
       ? lastWeekPodium
-      : (pastWeeks.length > 0 && pastWeeks[0].topPodium && pastWeeks[0].topPodium.length > 0)
+      : (pastWeeks.length > 0 && pastWeeks[0].topPodium && pastWeeks[0].topPodium.length > 0 && pastWeeks[0].topPodium.some((p: any) => (p.points || 0) > 0))
       ? pastWeeks[0].topPodium
       : [];
 
@@ -193,12 +191,22 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
             </div>
             <p className="text-white/40 text-xs sm:text-sm">Acompanhe a corrida pelo topo e o legado dos campeões</p>
           </div>
-          <button 
-            onClick={onClose} 
-            className="text-white/40 hover:text-white p-2 -mr-1 -mt-1 transition-colors bg-white/5 rounded-full"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 -mr-1 -mt-1">
+            <button
+              onClick={handleRefreshRanking}
+              disabled={isRefreshing}
+              className="text-white/40 hover:text-gold p-2 transition-colors bg-white/5 hover:bg-white/10 rounded-full"
+              title="Recalcular e atualizar pontos da semana"
+            >
+              <RefreshCw className={`w-4 h-4 text-gold ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+            <button 
+              onClick={onClose} 
+              className="text-white/40 hover:text-white p-2 transition-colors bg-white/5 rounded-full"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Tab Switcher */}

@@ -4,13 +4,14 @@ import { db } from '../lib/firebase';
 import { 
   Award, Check, X, Clock, Search, Plus, UserPlus, Star, Camera, Users, Trophy, Target, Gift, 
   Gamepad2, Scissors, Edit2, Save, Trash2, Sparkles, RefreshCw, Calendar, Crown, Zap, 
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, History, AlertTriangle, ShieldAlert, FileText, ArrowUpRight, ArrowDownRight, ExternalLink 
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, History, AlertTriangle, ShieldAlert, FileText, ArrowUpRight, ArrowDownRight, ExternalLink,
+  RotateCcw, Sliders, TrendingUp
 } from 'lucide-react';
 import { DEFAULT_THRESHOLDS, getLevelTier, getClientTier, compareClientsForRanking, setActiveThresholds, getTierName, getTierTheme, parseDateToMs } from '../utils/tierSystem';
 import { checkAndSyncClientRankBonuses, RANK_BONUSES_CONFIG, DEFAULT_RANK_BONUSES, RankBonusDefinition, setActiveRankBonuses, getActiveRankBonuses } from '../utils/bonusSystem';
 import { DEFAULT_REWARDS, RewardItem, calculateSeasonDates } from '../hooks/useGamificationSettings';
 import { useGamificationAutoSync } from '../hooks/useGamificationAutoSync';
-import { getCurrentWeekWindow } from '../utils/pointsReconciler';
+import { getCurrentWeekWindow, recalculateAndRestoreWeeklyRanking } from '../utils/pointsReconciler';
 import toast from 'react-hot-toast';
 import { compressImage } from '../utils/imageUtils';
 import { PastSeason, PastWeek, SeasonPodiumMember, PointTransaction } from '../types';
@@ -44,7 +45,11 @@ export function GamificationManager() {
   const [clientListSearchTerm, setClientListSearchTerm] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
-  const [pointAction, setPointAction] = useState<'add'|'remove'>('add');
+  const [pointAction, setPointAction] = useState<'add'|'remove'>('remove');
+  const [pointScope, setPointScope] = useState<'all_balances' | 'balance_only' | 'custom_direct'>('all_balances');
+  const [customDirectPts, setCustomDirectPts] = useState('');
+  const [customDirectSeasonal, setCustomDirectSeasonal] = useState('');
+  const [customDirectWeekly, setCustomDirectWeekly] = useState('');
 
   // Season State
   const [seasonStart, setSeasonStart] = useState('');
@@ -57,6 +62,7 @@ export function GamificationManager() {
   const [rankBonuses, setRankBonuses] = useState<RankBonusDefinition[]>(getActiveRankBonuses() || DEFAULT_RANK_BONUSES);
   const [editingTierForBonus, setEditingTierForBonus] = useState<number | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [isRecalculatingWeek, setIsRecalculatingWeek] = useState(false);
   const [isSavingSeason, setIsSavingSeason] = useState(false);
   const [isSyncingRankBonuses, setIsSyncingRankBonuses] = useState(false);
 
@@ -149,8 +155,20 @@ export function GamificationManager() {
         setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
         if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
         if (data.currentWeekNumber) setCurrentWeekNumber(Number(data.currentWeekNumber));
-        if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) setLastWeekPodium(data.lastWeekPodium);
-        if (data.lastWeekClosedAt) setLastWeekClosedAt(data.lastWeekClosedAt);
+        if (data.lastWeekPodium && Array.isArray(data.lastWeekPodium)) {
+          const hasPoints = data.lastWeekPodium.some((p: any) => (p.points || 0) > 0);
+          setLastWeekPodium(hasPoints ? data.lastWeekPodium : []);
+        }
+        if (data.lastWeekClosedAt) {
+          const closedMs = parseDateToMs(data.lastWeekClosedAt);
+          const isAccidental = closedMs >= new Date('2026-10-04T00:00:00.000Z').getTime() && closedMs <= new Date('2026-10-04T23:59:59.999Z').getTime();
+          setLastWeekClosedAt(isAccidental ? '2026-09-28T00:00:00.000Z' : data.lastWeekClosedAt);
+
+          // Se detectou a marcação acidental de domingo (04/10/2026), executa restauração em background
+          if (isAccidental) {
+            recalculateAndRestoreWeeklyRanking({ thresholds: data.tierThresholds }).catch(console.warn);
+          }
+        }
         if (data.tierThresholds) {
           setTierThresholds(data.tierThresholds);
           setActiveThresholds(data.tierThresholds);
@@ -417,7 +435,12 @@ export function GamificationManager() {
 
       // 1. Capturar os ganhadores do pódio e ranking da semana ANTES de zerar a pontuação
       const activeCompetitors = sortedClients.filter((c: any) => (c.weeklyPoints || 0) > 0);
-      const topCompetitors = activeCompetitors.length > 0 ? activeCompetitors : sortedClients;
+      if (activeCompetitors.length === 0) {
+        toast.error('Nenhum cliente possui pontos acumulados nesta semana. Clique em "Recalcular Pontos da Semana" para atualizar o ranking antes de encerrar.');
+        setIsResetting(false);
+        return;
+      }
+      const topCompetitors = activeCompetitors;
       const topThreeClients = topCompetitors.slice(0, 3);
 
       const podiumMembers: SeasonPodiumMember[] = topThreeClients.map((c, idx) => {
@@ -567,6 +590,29 @@ export function GamificationManager() {
       toast.error('Erro ao encerrar a semana.');
     } finally {
       setIsResetting(false);
+    }
+  };
+
+  const handleRecalculateWeek = async () => {
+    setIsRecalculatingWeek(true);
+    try {
+      const res = await recalculateAndRestoreWeeklyRanking({ thresholds: tierThresholds });
+      if (res.updatedCount > 0) {
+        toast.success(
+          `Ranking da semana atualizado com sucesso! ${res.updatedCount} cliente(s) tiveram suas pontuações restauradas desde segunda-feira (${res.totalPointsRestored.toLocaleString('pt-BR')} pts no total)!`,
+          { duration: 6000, icon: '⚡' }
+        );
+      } else {
+        toast.success(
+          `Tudo certo! ${res.checkedCount} clientes verificados. Todas as pontuações da semana de segunda até hoje já estão 100% sincronizadas!`,
+          { duration: 4000, icon: '✅' }
+        );
+      }
+    } catch (err: any) {
+      console.error('Erro ao recalcular pontos da semana:', err);
+      toast.error('Erro ao recalcular ranking da semana.');
+    } finally {
+      setIsRecalculatingWeek(false);
     }
   };
 
@@ -863,15 +909,22 @@ export function GamificationManager() {
 
   const handleAddPoints = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedClient || !pointsToAdd || isNaN(Number(pointsToAdd))) {
-      toast.error('Preencha os dados corretamente.');
+    if (!selectedClient) {
+      toast.error('Selecione um cliente primeiro.');
       return;
     }
 
-    const pts = parseInt(pointsToAdd);
-    if (pts <= 0) {
-      toast.error('O valor deve ser maior que zero.');
-      return;
+    if (pointScope === 'custom_direct') {
+      if (customDirectPts === '' || customDirectSeasonal === '' || customDirectWeekly === '') {
+        toast.error('Informe os valores para todos os 3 saldos.');
+        return;
+      }
+    } else {
+      const pts = parseInt(pointsToAdd);
+      if (!pts || pts <= 0) {
+        toast.error('O valor de pontos deve ser maior que zero.');
+        return;
+      }
     }
 
     setIsAdding(true);
@@ -883,95 +936,152 @@ export function GamificationManager() {
       const currentPts = Math.max(0, clientData.points ?? 0);
       const currentSeasonal = Math.max(0, clientData.seasonalPoints ?? 0);
       const currentWeekly = Math.max(0, clientData.weeklyPoints ?? 0);
+      const currentLifetime = Math.max(0, clientData.lifetimePoints ?? Math.max(currentPts, currentSeasonal));
 
       let newPts = 0;
-      let newSeasonal = 0;
-      let newWeekly = 0;
+      let newSeasonal = currentSeasonal;
+      let newWeekly = currentWeekly;
+      let newLifetime = currentLifetime;
+      let seasonHighest = Math.max(0, clientData.seasonHighestPoints ?? 0, clientData.highestSeasonalPoints ?? 0, currentSeasonal, currentPts);
+      let highestTier = clientData.seasonHighestTierLevel ?? clientData.highestTierLevel ?? 1;
       let deltaPoints = 0;
 
-      if (pointAction === 'add') {
-        newPts = currentPts + pts;
-        newSeasonal = currentSeasonal + pts;
-        newWeekly = currentWeekly + pts;
-        deltaPoints = pts;
+      const isReversionAll = pointScope === 'all_balances';
+      const isCustomDirect = pointScope === 'custom_direct';
 
-        const clientLifetime = Math.max(0, clientData.lifetimePoints ?? Math.max(currentPts, currentSeasonal));
-        const newLifetime = clientLifetime + pts;
-        const newLevel = Math.max(clientData.level || 1, Math.floor(newLifetime / 10000) + 1);
-
-        const currentHighest = Math.max(
-          clientData.seasonHighestPoints ?? 0,
-          clientData.highestSeasonalPoints ?? 0,
-          newSeasonal,
-          newPts
-        );
-        const tierInfo = getLevelTier(currentHighest, tierThresholds, 1);
-        const newHighestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+      if (isCustomDirect) {
+        newPts = Math.max(0, parseInt(customDirectPts) || 0);
+        newSeasonal = Math.max(0, parseInt(customDirectSeasonal) || 0);
+        newWeekly = Math.max(0, parseInt(customDirectWeekly) || 0);
+        newLifetime = Math.max(currentLifetime, newSeasonal, newPts);
+        seasonHighest = Math.max(0, newSeasonal, newPts);
+        const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
+        highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
           ? clientData.manualTierLevel
           : tierInfo.tierLevel;
-
-        const nowIso = new Date().toISOString();
-
-        await updateDoc(clientRef, {
-          points: newPts,
-          seasonalPoints: newSeasonal,
-          seasonHighestPoints: currentHighest,
-          highestSeasonalPoints: currentHighest,
-          seasonHighestTierLevel: newHighestTier,
-          highestTierLevel: newHighestTier,
-          weeklyPoints: newWeekly,
-          lifetimePoints: newLifetime,
-          level: newHighestTier,
-          lastPointsUpdate: nowIso
-        });
-
-        const updatedClient = {
-          ...clientData,
-          id: selectedClient.id,
-          points: newPts,
-          seasonalPoints: newSeasonal,
-          seasonHighestPoints: currentHighest,
-          highestSeasonalPoints: currentHighest,
-          seasonHighestTierLevel: newHighestTier,
-          highestTierLevel: newHighestTier,
-          weeklyPoints: newWeekly,
-          lifetimePoints: newLifetime,
-          level: newLevel,
-          lastPointsUpdate: nowIso
-        };
-        await checkAndSyncClientRankBonuses(selectedClient.id, updatedClient, tierThresholds);
+        deltaPoints = newPts - currentPts;
       } else {
-        // Remoção com piso zero estrito (NUNCA permite saldo negativo!)
-        newPts = Math.max(0, currentPts - pts);
-        deltaPoints = -(currentPts - newPts); // valor exato debitado do saldo
-        // Regra de não-regressão: a patente e os pontos sazonais nunca regridem ao debitar saldo gastável!
-        await updateDoc(clientRef, {
-          points: newPts
-        });
+        const pts = parseInt(pointsToAdd);
+        if (pointAction === 'add') {
+          newPts = currentPts + pts;
+          deltaPoints = pts;
+
+          if (isReversionAll) {
+            newSeasonal = currentSeasonal + pts;
+            newWeekly = currentWeekly + pts;
+            newLifetime = currentLifetime + pts;
+            seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
+            const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
+            highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+              ? clientData.manualTierLevel
+              : tierInfo.tierLevel;
+          }
+        } else {
+          // Remoção com piso zero estrito
+          newPts = Math.max(0, currentPts - pts);
+          deltaPoints = -(currentPts - newPts);
+
+          if (isReversionAll) {
+            newSeasonal = Math.max(0, currentSeasonal - pts);
+            newWeekly = Math.max(0, currentWeekly - pts);
+            newLifetime = Math.max(0, currentLifetime - pts);
+            seasonHighest = Math.max(0, newSeasonal, newPts);
+            const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
+            highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+              ? clientData.manualTierLevel
+              : tierInfo.tierLevel;
+          } else {
+            newSeasonal = currentSeasonal;
+            newWeekly = currentWeekly;
+          }
+        }
       }
 
-      const txDateIso = new Date().toISOString();
+      const nowIso = new Date().toISOString();
 
-      // Registra transação no extrato oficial
+      const updateData: any = {
+        points: newPts,
+        seasonalPoints: newSeasonal,
+        seasonHighestPoints: seasonHighest,
+        highestSeasonalPoints: seasonHighest,
+        seasonHighestTierLevel: highestTier,
+        highestTierLevel: highestTier,
+        level: highestTier,
+        weeklyPoints: newWeekly,
+        lifetimePoints: newLifetime,
+        lastPointsUpdate: nowIso
+      };
+
+      if (isReversionAll || isCustomDirect) {
+        updateData.manualTierOverride = false;
+        updateData.manualTierLevel = highestTier;
+
+        // Limpeza de bônus indevidos de patentes superiores que o cliente não atinge mais
+        let clientBonuses: any[] = Array.isArray(clientData.bonuses) ? [...clientData.bonuses] : [];
+        clientBonuses = clientBonuses.filter((b: any) => {
+          if (b.category === 'rank_level' && !b.isRedeemed) {
+            const def = rankBonuses.find(cfg => 
+              cfg.rankKey === b.rankKey || 
+              cfg.title?.trim().toLowerCase() === b.title?.trim().toLowerCase()
+            );
+            if (def && def.level > highestTier) return false;
+          }
+          return true;
+        });
+        updateData.bonuses = clientBonuses;
+      }
+
+      await updateDoc(clientRef, updateData);
+
+      const txType = isReversionAll && pointAction === 'remove'
+        ? 'reverted'
+        : (isCustomDirect ? 'correction' : (pointAction === 'add' ? 'manual_add' : 'manual_remove'));
+
+      const defaultDesc = isReversionAll
+        ? (pointAction === 'add' ? 'Ajuste de Pontuação em Todos os Saldos' : 'Estorno por Erro de Sistema (Todos os Saldos)')
+        : (isCustomDirect ? 'Ajuste Direto de Saldos' : (pointAction === 'add' ? 'Bônus Manual de Saldo Gastável' : 'Remoção Manual de Saldo Gastável'));
+
+      const txDateIso = nowIso;
+
       await addDoc(collection(db, 'point_transactions'), {
         clientId: selectedClient.id,
         clientName: selectedClient.username || selectedClient.firstName || 'Cliente',
         points: deltaPoints,
-        type: pointAction === 'add' ? 'manual_add' : 'manual_remove',
-        description: addDescription || (pointAction === 'add' ? 'Bônus Manual' : 'Remoção Manual'),
+        type: txType,
+        scope: pointScope,
+        description: addDescription || defaultDesc,
         balanceAfter: newPts,
         createdAt: txDateIso
       });
 
-      toast.success(`${pts} pontos ${pointAction === 'add' ? 'adicionados' : 'removidos'} para ${selectedClient.username}!`);
+      const updated = {
+        ...clientData,
+        ...updateData,
+        id: selectedClient.id
+      };
+
+      // Atualiza o estado em memória imediatamente (0 delay de interface)
+      setClients(prev => prev.map(c => c.id === selectedClient.id ? { ...c, ...updated } : c));
+      setSelectedClient(prev => prev ? { ...prev, ...updated } : null);
+      if (auditClient?.id === selectedClient.id) setAuditClient(prev => ({ ...prev, ...updated }));
+
+      if (pointAction === 'add' && isReversionAll) {
+        await checkAndSyncClientRankBonuses(selectedClient.id, updated, tierThresholds, rankBonuses);
+      }
+
+      toast.success(
+        isCustomDirect
+          ? `Saldos de ${selectedClient.username || 'Cliente'} atualizados com sucesso!`
+          : (isReversionAll
+              ? `${pointsToAdd} pontos ${pointAction === 'add' ? 'adicionados' : 'revertidos'} em todos os saldos com sucesso!`
+              : `${pointsToAdd} pontos ${pointAction === 'add' ? 'creditados' : 'debitados'} no saldo atual com sucesso!`)
+      );
       
       setPointsToAdd('');
-      setAddDescription(pointAction === 'add' ? 'Bônus Manual' : 'Remoção Manual');
-      setSelectedClient(null);
-      setSearchTerm('');
+      setAddDescription('');
     } catch (e) {
       if (e.code !== 'permission-denied') console.error(e);
-      toast.error(`Erro ao ${pointAction === 'add' ? 'adicionar' : 'remover'} pontos.`);
+      toast.error('Erro ao ajustar pontos.');
     } finally {
       setIsAdding(false);
     }
@@ -996,6 +1106,63 @@ export function GamificationManager() {
         (c.email || '').toLowerCase().includes(searchTerm.toLowerCase())
       ).slice(0, 5) 
     : [];
+
+  useEffect(() => {
+    if (selectedClient) {
+      setCustomDirectPts(String(selectedClient.points ?? 0));
+      setCustomDirectSeasonal(String(selectedClient.seasonalPoints ?? 0));
+      setCustomDirectWeekly(String(selectedClient.weeklyPoints ?? 0));
+    }
+  }, [selectedClient?.id]);
+
+  const overviewAdjustPreview = React.useMemo(() => {
+    if (!selectedClient) return null;
+    const curPts = selectedClient.points ?? 0;
+    const curSeasonal = selectedClient.seasonalPoints ?? 0;
+    const curWeekly = selectedClient.weeklyPoints ?? 0;
+    const pts = parseInt(pointsToAdd) || 0;
+
+    let resPts = curPts;
+    let resSeasonal = curSeasonal;
+    let resWeekly = curWeekly;
+
+    if (pointScope === 'custom_direct') {
+      resPts = Math.max(0, parseInt(customDirectPts) || 0);
+      resSeasonal = Math.max(0, parseInt(customDirectSeasonal) || 0);
+      resWeekly = Math.max(0, parseInt(customDirectWeekly) || 0);
+    } else if (pointScope === 'all_balances') {
+      if (pointAction === 'add') {
+        resPts = curPts + pts;
+        resSeasonal = curSeasonal + pts;
+        resWeekly = curWeekly + pts;
+      } else {
+        resPts = Math.max(0, curPts - pts);
+        resSeasonal = Math.max(0, curSeasonal - pts);
+        resWeekly = Math.max(0, curWeekly - pts);
+      }
+    } else {
+      if (pointAction === 'add') {
+        resPts = curPts + pts;
+      } else {
+        resPts = Math.max(0, curPts - pts);
+      }
+    }
+
+    const peak = Math.max(0, resSeasonal, resPts);
+    const newTier = getLevelTier(peak, tierThresholds, 1);
+    const oldTier = getClientTier(selectedClient, tierThresholds);
+
+    return {
+      curPts,
+      curSeasonal,
+      curWeekly,
+      resPts,
+      resSeasonal,
+      resWeekly,
+      oldTier,
+      newTier
+    };
+  }, [selectedClient, pointScope, pointAction, pointsToAdd, customDirectPts, customDirectSeasonal, customDirectWeekly, tierThresholds]);
 
   if (loading) {
     return <div className="p-8 text-center text-white/50 animate-pulse">Carregando dados...</div>;
@@ -1347,7 +1514,20 @@ export function GamificationManager() {
                 <span>Processando encerramento...</span>
               </div>
             ) : (
-              <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <button 
+                  type="button"
+                  onClick={() => handleRecalculateWeek()}
+                  disabled={isRecalculatingWeek}
+                  className="px-4 py-2.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 hover:border-emerald-500/50 rounded-xl font-bold transition-all text-xs flex items-center justify-center gap-2 shadow-sm"
+                  title="Recalcula e recupera os pontos acumulados por todos os clientes desde a última segunda-feira até hoje, restaurando as posições legítimas do ranking semanal"
+                >
+                  <TrendingUp className={`w-4 h-4 text-emerald-400 shrink-0 ${isRecalculatingWeek ? 'animate-spin' : ''}`} />
+                  <span>{isRecalculatingWeek ? 'Recalculando Semana...' : 'Recalcular Pontos da Semana (Segunda até Hoje)'}</span>
+                  <span className="text-[10px] opacity-80 font-normal bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                    Restaurar Ranking
+                  </span>
+                </button>
                 <button 
                   onClick={() => triggerManualSync()}
                   disabled={isAutoSyncing}
@@ -1405,7 +1585,7 @@ export function GamificationManager() {
                 </span>
               </div>
               <p className="text-xs text-white/60 mt-0.5">
-                {lastWeekClosedAt 
+                {lastWeekClosedAt && (!lastWeekPodium || lastWeekPodium.length === 0 || lastWeekPodium.some(p => (p.points || 0) > 0))
                   ? `Fechamento realizado em ${new Date(lastWeekClosedAt).toLocaleString('pt-BR')}`
                   : 'Nenhum fechamento semanal registrado ainda.'}
               </p>
@@ -1413,11 +1593,11 @@ export function GamificationManager() {
           </div>
         </div>
 
-        {lastWeekPodium.length === 0 ? (
+        {lastWeekPodium.length === 0 || lastWeekPodium.every(p => (p.points || 0) === 0) ? (
           <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/5 text-center">
             <Trophy className="w-8 h-8 text-white/20 mx-auto mb-2" />
             <p className="text-sm text-white/60 font-medium">Nenhum pódio de semana anterior arquivado ainda.</p>
-            <p className="text-xs text-white/40 mt-1">Ao clicar em "Encerrar Semana", os ganhadores do 1º, 2º e 3º lugar aparecerão aqui como comprovação oficial.</p>
+            <p className="text-xs text-white/40 mt-1">Ao clicar em "Encerrar Semana", os ganhadores legítimos do 1º, 2º e 3º lugar aparecerão aqui como comprovação oficial.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2158,8 +2338,8 @@ export function GamificationManager() {
                 )}
               </div>
             ) : (
-              <form onSubmit={handleAddPoints} className="bg-white/5 border border-white/10 rounded-xl p-5">
-                <div className="flex justify-between items-start mb-4 border-b border-white/5 pb-4">
+              <form onSubmit={handleAddPoints} className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-4">
+                <div className="flex justify-between items-start border-b border-white/5 pb-3">
                   <div>
                     <p className="text-[10px] uppercase tracking-widest text-white/50 font-bold mb-1">Cliente Selecionado</p>
                     <p className="font-bold text-white text-lg">{selectedClient.username}</p>
@@ -2174,68 +2354,285 @@ export function GamificationManager() {
                   </button>
                 </div>
 
-                <div className="space-y-4">
-                  <div className="flex bg-black/40 border border-white/10 rounded-xl p-1 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPointAction('add')}
-                      className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${pointAction === 'add' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'}`}
-                    >
-                      Adicionar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPointAction('remove')}
-                      className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${pointAction === 'remove' ? 'bg-red-500/20 text-red-400' : 'text-white/40 hover:text-white/70'}`}
-                    >
-                      Remover
-                    </button>
+                {/* 4 Cards com os saldos atuais do cliente */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="p-2.5 rounded-lg bg-black/40 border border-white/10">
+                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold block">
+                      Saldo Atual
+                    </span>
+                    <span className="text-sm font-mono font-bold text-gold block mt-0.5">
+                      {(selectedClient.points ?? 0).toLocaleString('pt-BR')} pts
+                    </span>
                   </div>
 
-                  <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-2">Quantidade de Pontos</label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Star className="h-4 w-4 text-gold" />
+                  <div className="p-2.5 rounded-lg bg-black/40 border border-white/10">
+                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold block">
+                      Temporada
+                    </span>
+                    <span className="text-sm font-mono font-bold text-white block mt-0.5">
+                      {(selectedClient.seasonalPoints ?? 0).toLocaleString('pt-BR')} pts
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-black/40 border border-white/10">
+                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold block">
+                      Semana (Ranking)
+                    </span>
+                    <span className="text-sm font-mono font-bold text-cyan-400 block mt-0.5">
+                      {(selectedClient.weeklyPoints ?? 0).toLocaleString('pt-BR')} pts
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-black/40 border border-white/10">
+                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold block">
+                      Patente
+                    </span>
+                    <div className="mt-0.5">
+                      {(() => {
+                        const tier = getClientTier(selectedClient, tierThresholds);
+                        return (
+                          <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${tier.bgColor} bg-opacity-20 ${tier.colorText} border border-current border-opacity-30 inline-flex items-center gap-1`}>
+                            <Crown className="w-3 h-3" /> {tier.name}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Seletor de Escopo / Tipo de Ajuste */}
+                <div className="space-y-1.5 pt-1">
+                  <label className="text-[10px] uppercase font-bold text-white/50 block">
+                    Tipo de Ajuste
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPointScope('all_balances')}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        pointScope === 'all_balances'
+                          ? 'bg-rose-500/20 border-rose-500/50 text-white shadow-lg shadow-rose-950/20'
+                          : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-bold text-xs text-rose-300">
+                        <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Reversão de Erro</span>
                       </div>
+                      <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
+                        Estorna Saldo, Temporada e Semana, recalculando Patente.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPointScope('balance_only')}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        pointScope === 'balance_only'
+                          ? 'bg-amber-500/20 border-amber-500/50 text-white shadow-lg shadow-amber-950/20'
+                          : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-bold text-xs text-amber-300">
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Apenas Saldo Atual</span>
+                      </div>
+                      <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
+                        Altera saldo gastável. Preserva temporada e ranking intactos.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPointScope('custom_direct')}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        pointScope === 'custom_direct'
+                          ? 'bg-blue-500/20 border-blue-500/50 text-white shadow-lg shadow-blue-950/20'
+                          : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-bold text-xs text-blue-300">
+                        <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Definir Saldos Exatos</span>
+                      </div>
+                      <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
+                        Edite manualmente os 3 saldos exatos do cliente.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Campos quando for por Quantidade (all_balances ou balance_only) */}
+                {pointScope !== 'custom_direct' ? (
+                  <div className="space-y-3">
+                    <div className="flex bg-black/40 border border-white/10 rounded-xl p-1 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPointAction('remove')}
+                        className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${pointAction === 'remove' ? 'bg-red-500/25 text-red-300 border border-red-500/40' : 'text-white/40 hover:text-white/70'}`}
+                      >
+                        Remover / Estornar (-)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPointAction('add')}
+                        className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${pointAction === 'add' ? 'bg-white/10 text-white border border-white/10' : 'text-white/40 hover:text-white/70'}`}
+                      >
+                        Adicionar (+)
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-1.5">Quantidade de Pontos</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Star className="h-4 w-4 text-gold" />
+                        </div>
+                        <input
+                          type="number"
+                          required
+                          min="1"
+                          value={pointsToAdd}
+                          onChange={(e) => setPointsToAdd(e.target.value)}
+                          className="w-full bg-black/40 border border-white/10 rounded-xl py-2 pl-9 pr-4 text-white font-mono font-bold focus:outline-none focus:border-gold/50 text-sm"
+                          placeholder="Ex: 5000"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-1.5">Motivo / Descrição</label>
                       <input
-                        type="number"
+                        type="text"
                         required
-                        min="1"
-                        value={pointsToAdd}
-                        onChange={(e) => setPointsToAdd(e.target.value)}
-                        className="w-full bg-black/40 border border-white/10 rounded-xl py-2 pl-9 pr-4 text-white font-mono font-bold focus:outline-none focus:border-gold/50"
-                        placeholder="Ex: 500"
+                        value={addDescription}
+                        onChange={(e) => setAddDescription(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl py-2 px-4 text-white focus:outline-none focus:border-gold/50 text-sm"
+                        placeholder={pointScope === 'all_balances' ? 'Ex: Estorno de falha de sistema' : 'Ex: Bônus ou ajuste manual'}
                       />
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-2">Motivo / Descrição</label>
-                    <input
-                      type="text"
-                      required
-                      value={addDescription}
-                      onChange={(e) => setAddDescription(e.target.value)}
-                      className="w-full bg-black/40 border border-white/10 rounded-xl py-2 px-4 text-white focus:outline-none focus:border-gold/50 text-sm"
-                      placeholder="Ex: Bônus de aniversário"
-                    />
+                ) : (
+                  /* Campos quando for Definir Saldos Exatos (custom_direct) */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[10px] uppercase font-bold text-gold block mb-1">
+                          Novo Saldo Atual (Gastável)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          required
+                          value={customDirectPts}
+                          onChange={(e) => setCustomDirectPts(e.target.value)}
+                          className="w-full bg-black/40 border border-gold/40 rounded-xl py-2 px-3 text-gold font-mono font-bold text-sm focus:outline-none focus:border-gold"
+                          placeholder="Ex: 0"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase font-bold text-white/50 block mb-1">
+                          Novos Pontos Temporada
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          required
+                          value={customDirectSeasonal}
+                          onChange={(e) => setCustomDirectSeasonal(e.target.value)}
+                          className="w-full bg-black/40 border border-white/20 rounded-xl py-2 px-3 text-white font-mono font-bold text-sm focus:outline-none focus:border-gold"
+                          placeholder="Ex: 0"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase font-bold text-cyan-400 block mb-1">
+                          Novos Pontos Semana (Ranking)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          required
+                          value={customDirectWeekly}
+                          onChange={(e) => setCustomDirectWeekly(e.target.value)}
+                          className="w-full bg-black/40 border border-cyan-500/40 rounded-xl py-2 px-3 text-cyan-300 font-mono font-bold text-sm focus:outline-none focus:border-cyan-400"
+                          placeholder="Ex: 0"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs uppercase tracking-widest text-white/50 font-bold mb-1.5">Motivo da Alteração Direta</label>
+                      <input
+                        type="text"
+                        required
+                        value={addDescription}
+                        onChange={(e) => setAddDescription(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl py-2 px-4 text-white focus:outline-none focus:border-gold/50 text-sm"
+                        placeholder="Ex: Correção direta de saldos pelo administrador"
+                      />
+                    </div>
                   </div>
-                  
-                  <button
-                    type="submit"
-                    disabled={isAdding}
-                    className={`w-full flex justify-center items-center gap-2 font-bold py-3 rounded-xl transition-colors shadow-lg ${pointAction === 'add' ? 'bg-gold text-carbon hover:bg-gold/90 shadow-gold/20' : 'bg-red-500 text-white hover:bg-red-600 shadow-red-500/20'}`}
-                  >
-                    {isAdding ? (
-                      <div className={`w-5 h-5 border-2 ${pointAction === 'add' ? 'border-carbon/20 border-t-carbon' : 'border-white/20 border-t-white'} rounded-full animate-spin`} />
-                    ) : (
-                      <>
-                        <UserPlus className="w-4 h-4" />
-                        {pointAction === 'add' ? 'Adicionar Pontos' : 'Remover Pontos'}
-                      </>
-                    )}
-                  </button>
-                </div>
+                )}
+
+                {/* Prévia Antes ➔ Depois */}
+                {overviewAdjustPreview && (
+                  <div className="p-3 rounded-xl bg-black/40 border border-white/10 text-xs flex flex-wrap items-center gap-3">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">Prévia:</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-white/60">Saldo:</span>
+                      <span className="font-mono text-white/40">{overviewAdjustPreview.curPts}</span>
+                      <span className="text-gold font-bold">➔</span>
+                      <span className="font-mono font-bold text-gold">{overviewAdjustPreview.resPts} pts</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-white/60">Temporada:</span>
+                      <span className="font-mono text-white/40">{overviewAdjustPreview.curSeasonal}</span>
+                      <span className="text-white font-bold">➔</span>
+                      <span className="font-mono font-bold text-white">{overviewAdjustPreview.resSeasonal} pts</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-white/60">Semana:</span>
+                      <span className="font-mono text-white/40">{overviewAdjustPreview.curWeekly}</span>
+                      <span className="text-cyan-400 font-bold">➔</span>
+                      <span className="font-mono font-bold text-cyan-400">{overviewAdjustPreview.resWeekly} pts</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-white/60">Patente:</span>
+                      <span className="text-white/50">{overviewAdjustPreview.oldTier.name}</span>
+                      <span className="text-purple-400 font-bold">➔</span>
+                      <span className={`font-bold ${overviewAdjustPreview.newTier.colorText}`}>
+                        {overviewAdjustPreview.newTier.name} (Nv. {overviewAdjustPreview.newTier.tierLevel})
+                      </span>
+                    </div>
+                  </div>
+                )}
+                
+                <button
+                  type="submit"
+                  disabled={isAdding}
+                  className={`w-full flex justify-center items-center gap-2 font-bold py-3 rounded-xl transition-colors shadow-lg ${
+                    pointAction === 'add' && pointScope !== 'custom_direct'
+                      ? 'bg-gold text-carbon hover:bg-gold/90 shadow-gold/20' 
+                      : 'bg-red-500 text-white hover:bg-red-600 shadow-red-500/20'
+                  }`}
+                >
+                  {isAdding ? (
+                    <div className={`w-5 h-5 border-2 ${pointAction === 'add' && pointScope !== 'custom_direct' ? 'border-carbon/20 border-t-carbon' : 'border-white/20 border-t-white'} rounded-full animate-spin`} />
+                  ) : (
+                    <>
+                      {pointScope === 'all_balances' && <RotateCcw className="w-4 h-4" />}
+                      {pointScope === 'balance_only' && <Zap className="w-4 h-4" />}
+                      {pointScope === 'custom_direct' && <Sliders className="w-4 h-4" />}
+                      <span>
+                        {pointScope === 'custom_direct'
+                          ? 'Salvar Novos Saldos'
+                          : (pointScope === 'all_balances'
+                              ? (pointAction === 'remove' ? 'Reverter Erro (Estornar Todos os Saldos)' : 'Adicionar em Todos os Saldos')
+                              : (pointAction === 'add' ? 'Adicionar ao Saldo Atual' : 'Remover do Saldo Atual'))}
+                      </span>
+                    </>
+                  )}
+                </button>
               </form>
             )}
           </div>

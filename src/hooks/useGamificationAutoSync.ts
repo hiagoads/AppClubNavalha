@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { reconcileAllClientsPointsAndTiers, ReconcileResult } from '../utils/pointsReconciler';
 import { useGamificationSettings } from './useGamificationSettings';
+import { auth } from '../lib/firebase';
 import toast from 'react-hot-toast';
 
 export function useGamificationAutoSync(options?: { enabled?: boolean; intervalMs?: number; silent?: boolean }) {
@@ -15,6 +16,9 @@ export function useGamificationAutoSync(options?: { enabled?: boolean; intervalM
 
   const runSync = useCallback(async (isManual = false) => {
     if (isSyncingRef.current) return;
+    // Apenas executa sincronização automática se o administrador estiver autenticado
+    if (!auth.currentUser || auth.currentUser.email?.trim().toLowerCase() !== 'slvhiago2@gmail.com') return;
+
     isSyncingRef.current = true;
     setIsSyncing(true);
 
@@ -41,8 +45,10 @@ export function useGamificationAutoSync(options?: { enabled?: boolean; intervalM
         }
       }
       return res;
-    } catch (err) {
-      console.error('Erro na sincronização de gamificação:', err);
+    } catch (err: any) {
+      if (err?.code !== 'permission-denied' && !String(err?.message || '').toLowerCase().includes('permission')) {
+        console.error('Erro na sincronização de gamificação:', err);
+      }
       if (isManual) {
         toast.error('Erro ao sincronizar pontuações.');
       }

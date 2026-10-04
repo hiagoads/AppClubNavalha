@@ -83,7 +83,7 @@ export function ClientPointsAuditModal({
     if (!isOpen || !client?.id) return;
     const unsub = onSnapshot(doc(db, 'clients', client.id), (snap) => {
       if (snap.exists()) {
-        const d = { id: snap.id, ...snap.data() };
+        const d: any = { id: snap.id, ...snap.data() };
         setLiveClient(d);
         setCustomDirectPts(String(d.points ?? 0));
         setCustomDirectSeasonal(String(d.seasonalPoints ?? 0));
