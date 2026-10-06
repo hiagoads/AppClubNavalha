@@ -46,7 +46,8 @@ export function useGamificationAutoSync(options?: { enabled?: boolean; intervalM
       }
       return res;
     } catch (err: any) {
-      if (err?.code !== 'permission-denied' && !String(err?.message || '').toLowerCase().includes('permission')) {
+      const errMsg = String(err?.message || err?.code || err || '').toLowerCase();
+      if (!errMsg.includes('permission') && !errMsg.includes('insufficient') && err?.code !== 'permission-denied') {
         console.error('Erro na sincronização de gamificação:', err);
       }
       if (isManual) {

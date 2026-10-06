@@ -79,21 +79,13 @@ export function GamificationManager() {
 
   // Lista dos competidores ativos na semana corrente (atenta à data dos créditos/débitos)
   const activeWeeklyClients = React.useMemo(() => {
-    const { startTime } = getCurrentWeekWindow(lastWeekClosedAt);
-    const weekStartMs = startTime.getTime();
-
     const list = clients.filter((c: any) => {
-      const weekly = c.weeklyPoints ?? 0;
-      if (weekly > 0) return true;
-      const lastUpdateMs = parseDateToMs(c.lastPointsUpdate) || parseDateToMs(c.updatedAt);
-      if (lastUpdateMs >= weekStartMs && ((c.seasonalPoints || 0) > 0 || (c.points || 0) > 0)) {
-        return true;
-      }
-      return false;
+      const weekly = Number(c.weeklyPoints || 0);
+      return weekly > 0;
     });
 
     return [...list].sort(compareClientsForRanking);
-  }, [clients, lastWeekClosedAt]);
+  }, [clients]);
 
   // Rewards State
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
@@ -160,14 +152,7 @@ export function GamificationManager() {
           setLastWeekPodium(hasPoints ? data.lastWeekPodium : []);
         }
         if (data.lastWeekClosedAt) {
-          const closedMs = parseDateToMs(data.lastWeekClosedAt);
-          const isAccidental = closedMs >= new Date('2026-10-04T00:00:00.000Z').getTime() && closedMs <= new Date('2026-10-04T23:59:59.999Z').getTime();
-          setLastWeekClosedAt(isAccidental ? '2026-09-28T00:00:00.000Z' : data.lastWeekClosedAt);
-
-          // Se detectou a marcação acidental de domingo (04/10/2026), executa restauração em background
-          if (isAccidental) {
-            recalculateAndRestoreWeeklyRanking({ thresholds: data.tierThresholds }).catch(console.warn);
-          }
+          setLastWeekClosedAt(data.lastWeekClosedAt);
         }
         if (data.tierThresholds) {
           setTierThresholds(data.tierThresholds);
@@ -455,7 +440,7 @@ export function GamificationManager() {
           position,
           username: c.username || c.firstName || `Ganhador ${position}`,
           avatarUrl: c.avatarUrl || '',
-          points: c.weeklyPoints ?? c.points ?? 0,
+          points: Number(c.weeklyPoints || 0),
           reward: rewardDesc,
           tierName: tier.name
         };
@@ -467,7 +452,7 @@ export function GamificationManager() {
           position: idx + 1,
           username: c.username || c.firstName || `Competidor ${idx + 1}`,
           avatarUrl: c.avatarUrl || '',
-          points: c.weeklyPoints ?? c.points ?? 0,
+          points: Number(c.weeklyPoints || 0),
           tierName: tier.name
         };
       });

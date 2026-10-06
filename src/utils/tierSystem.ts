@@ -273,8 +273,7 @@ export function parseDateToMs(val: any): number {
  */
 export const compareClientsForRanking = (a: any, b: any): number => {
   const getWeeklyScore = (c: any) => {
-    if (typeof c.weeklyPoints === 'number') return Math.max(0, c.weeklyPoints);
-    return Math.max(0, c.seasonalPoints || c.points || 0);
+    return Math.max(0, Number(c?.weeklyPoints || 0));
   };
   const ptsA = getWeeklyScore(a);
   const ptsB = getWeeklyScore(b);

@@ -69,15 +69,10 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
       const weekStartMs = startTime.getTime();
 
       // Filtra competidores da semana:
-      // O cliente deve ter weeklyPoints > 0 OU pontuado nesta semana (lastPointsUpdate >= weekStartMs)
+      // O ranking da semana considera única e exclusivamente a pontuação semanal legítima (weeklyPoints > 0)
       const activeCompetitors = allClients.filter((c: any) => {
-        const weekly = c.weeklyPoints ?? 0;
-        if (weekly > 0) return true;
-        const lastUpdateMs = parseDateToMs(c.lastPointsUpdate) || parseDateToMs(c.updatedAt);
-        if (lastUpdateMs >= weekStartMs && ((c.seasonalPoints || 0) > 0 || (c.points || 0) > 0)) {
-          return true;
-        }
-        return false;
+        const weekly = Number(c.weeklyPoints || 0);
+        return weekly > 0;
       });
 
       // Aplica a ordenação oficial com os 3 critérios de desempate
@@ -155,7 +150,7 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
     ? new Date(lastWeekClosedAt).toLocaleDateString('pt-BR') 
     : (pastWeeks[0]?.closedAt ? new Date(pastWeeks[0].closedAt).toLocaleDateString('pt-BR') : '');
 
-  const totalSeasonalXP = ranking.reduce((acc, curr) => acc + (curr.weeklyPoints || curr.seasonalPoints || curr.points || 0), 0);
+  const totalWeeklyXP = ranking.reduce((acc, curr) => acc + Number(curr.weeklyPoints || 0), 0);
   const leader = ranking.length > 0 ? ranking[0] : null;
 
   // Calculate timeline progress
@@ -470,9 +465,7 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                     const isFirst = client.position === 1;
                     const isSecond = client.position === 2;
                     const isThird = client.position === 3;
-                    const displayPoints = typeof client.weeklyPoints === 'number'
-                      ? Math.max(0, client.weeklyPoints)
-                      : (client.seasonalPoints || client.points || 0);
+                    const displayPoints = Math.max(0, Number(client.weeklyPoints || 0));
                     const tier = getClientTier(client, thresholds);
                     
                     return (

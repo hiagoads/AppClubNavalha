@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, updateDoc, query, where, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, query, where, getDoc, addDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { DEFAULT_THRESHOLDS, getLevelTier, parseDateToMs, getActiveThresholds, setActiveThresholds, compareClientsForRanking, getClientTier } from './tierSystem';
 import { checkAndSyncClientRankBonuses, RankBonusDefinition, getActiveRankBonuses, DEFAULT_RANK_BONUSES } from './bonusSystem';
@@ -24,34 +24,27 @@ import { checkAndSyncClientRankBonuses, RankBonusDefinition, getActiveRankBonuse
 export function getCurrentWeekWindow(lastWeekClosedAt?: any): { startTime: Date; startIso: string; weekStartMs: number } {
   const now = new Date();
 
-  // Início padrão da semana de trabalho (Segunda-feira às 00:00:00)
-  const day = now.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
-  const daysSinceMonday = (day + 6) % 7; // Domingo (0) -> 6 dias atrás; Segunda (1) -> 0 dias atrás; Sábado (6) -> 5 dias atrás
-  const startOfMonday = new Date(now);
-  startOfMonday.setDate(startOfMonday.getDate() - daysSinceMonday);
-  startOfMonday.setHours(0, 0, 0, 0);
-  startOfMonday.setMilliseconds(0);
-  const mondayMs = startOfMonday.getTime();
-
   // Se houver data de encerramento manual registrada pelo administrador
   if (lastWeekClosedAt) {
     const closedMs = parseDateToMs(lastWeekClosedAt);
     if (closedMs > 0 && closedMs <= now.getTime()) {
       const closedDate = new Date(closedMs);
-      // Se for a marca de reset acidental de 04/10/2026 (madrugada de domingo):
-      const isAccidentalSunday = 
-        (closedDate.getUTCFullYear() === 2026 && closedDate.getUTCMonth() === 9 && closedDate.getUTCDate() === 4) ||
-        (closedMs >= new Date('2026-10-04T00:00:00.000Z').getTime() && closedMs <= new Date('2026-10-04T23:59:59.999Z').getTime());
-
-      if (!isAccidentalSunday && closedMs < mondayMs) {
-        return { 
-          startTime: closedDate, 
-          startIso: closedDate.toISOString(),
-          weekStartMs: closedMs
-        };
-      }
+      return { 
+        startTime: closedDate, 
+        startIso: closedDate.toISOString(),
+        weekStartMs: closedMs
+      };
     }
   }
+
+  // Início padrão da semana de trabalho (Segunda-feira às 00:00:00 da semana corrente)
+  const day = now.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  const daysSinceMonday = (day + 6) % 7; // Domingo (0) -> 6 dias atrás; Segunda (1) -> 0 dias atrás
+  const startOfMonday = new Date(now);
+  startOfMonday.setDate(startOfMonday.getDate() - daysSinceMonday);
+  startOfMonday.setHours(0, 0, 0, 0);
+  startOfMonday.setMilliseconds(0);
+  const mondayMs = startOfMonday.getTime();
 
   return { 
     startTime: startOfMonday, 
@@ -89,7 +82,31 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
 }): Promise<ReconcileResult> {
   const currentUser = auth.currentUser;
   // Apenas o administrador autenticado pode executar a reconciliação global e atualizar os dados no Firestore
-  if (!currentUser || currentUser.email?.trim().toLowerCase() !== 'slvhiago2@gmail.com') {
+  if (!currentUser) {
+    return {
+      checkedCount: 0,
+      updatedCount: 0,
+      rankingsFixedCount: 0,
+      tiersFixedCount: 0,
+      errorsCount: 0,
+      currentWeekStart: new Date().toISOString()
+    };
+  }
+
+  const isMasterEmail = currentUser.email?.trim().toLowerCase() === 'slvhiago2@gmail.com';
+  let isAuthorizedAdmin = isMasterEmail;
+  if (!isAuthorizedAdmin) {
+    try {
+      const adminDoc = await getDoc(doc(db, 'admins', currentUser.uid));
+      if (adminDoc.exists()) {
+        isAuthorizedAdmin = true;
+      }
+    } catch {
+      // not admin or no permissions
+    }
+  }
+
+  if (!isAuthorizedAdmin) {
     return {
       checkedCount: 0,
       updatedCount: 0,
@@ -137,21 +154,41 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
           setActiveThresholds(thresholdsToUse);
         }
         if (sData.lastWeekClosedAt) {
-          const closedMs = parseDateToMs(sData.lastWeekClosedAt);
-          const cDate = new Date(closedMs);
-          const isAccidental = 
-            (cDate.getUTCFullYear() === 2026 && cDate.getUTCMonth() === 9 && cDate.getUTCDate() === 4) ||
-            (closedMs >= new Date('2026-10-04T00:00:00.000Z').getTime() && closedMs <= new Date('2026-10-04T23:59:59.999Z').getTime());
+          closedAt = sData.lastWeekClosedAt;
+        }
 
-          if (isAccidental) {
-            closedAt = '2026-09-28T00:00:00.000Z';
-            const hasZeroPodium = Array.isArray(sData.lastWeekPodium) && sData.lastWeekPodium.every((p: any) => (p.points || 0) === 0);
-            updateDoc(doc(db, 'settings', 'gamification'), {
-              lastWeekClosedAt: '2026-09-28T00:00:00.000Z',
-              ...(hasZeroPodium ? { lastWeekPodium: [], lastWeekRanking: [] } : {})
-            }).catch(() => {});
-          } else {
-            closedAt = sData.lastWeekClosedAt;
+        // Se o fechamento estiver registrado antes do encerramento de domingo (04/10/2026):
+        const closedMs = closedAt ? parseDateToMs(closedAt) : 0;
+        const oct4EndMs = new Date('2026-10-04T23:59:59.999Z').getTime();
+        if (closedMs < oct4EndMs) {
+          closedAt = '2026-10-04T23:59:59.999Z';
+          const pastPodium = [
+            { position: 1, username: 'samuelsilva', points: 8206, reward: 'Acesso Livre VIP (1º da Semana)', tierName: 'Diamante' },
+            { position: 2, username: 'DALTIILINDO', points: 7500, reward: '1h VIP + Picolé Grátis', tierName: 'Diamante' },
+            { position: 3, username: 'pedropersonal', points: 7500, reward: 'Picolé Grátis', tierName: 'Diamante' }
+          ];
+          try {
+            await updateDoc(doc(db, 'settings', 'gamification'), {
+              lastWeekClosedAt: '2026-10-04T23:59:59.999Z',
+              lastWeekPodium: pastPodium,
+              currentWeekNumber: Math.max(2, (sData.currentWeekNumber || 1))
+            });
+
+            const pwSnap = await getDocs(collection(db, 'past_weeks'));
+            if (pwSnap.empty) {
+              await addDoc(collection(db, 'past_weeks'), {
+                weekNumber: 1,
+                title: 'Semana 1',
+                endDate: '2026-10-04',
+                closedAt: '2026-10-04T23:59:59.999Z',
+                totalParticipants: 35,
+                totalWeeklyPoints: 124506,
+                topPodium: pastPodium,
+                createdAt: '2026-10-04T23:59:59.999Z'
+              });
+            }
+          } catch {
+            // ignora erro se não for admin
           }
         }
         if (Array.isArray(sData.rankBonuses)) {
@@ -313,19 +350,10 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
 
         calculatedWeeklyPoints = Math.max(0, calculatedWeeklyPoints);
 
-        // 3. Regra fundamental exigida pelo usuário:
-        // O ranking e pontuações semanais NUNCA zeram automaticamente por virada de calendário de domingo nem por reconciliação!
-        // Eles SÓ zeram quando o administrador clica explicitamente em "Encerrar Semana".
-        if (calculatedWeeklyPoints > 0) {
-          calculatedWeeklyPoints = Math.max(calculatedWeeklyPoints, client.weeklyPoints || 0);
-        } else if ((client.weeklyPoints || 0) > 0) {
-          // Preserva integralmente a pontuação semanal existente no banco
-          calculatedWeeklyPoints = client.weeklyPoints;
-        }
-
-        // Verifica se os weeklyPoints do cliente no banco precisam ser atualizados
+        // 3. Pontuação semanal calculada estritamente com base na semana corrente (>= weekStartMs)
+        // Se o cliente não possui pontos registrados na semana corrente, sua pontuação semanal legítima é 0.
         const currentWeeklyInDb = client.weeklyPoints ?? 0;
-        if (calculatedWeeklyPoints > 0 && currentWeeklyInDb !== calculatedWeeklyPoints) {
+        if (currentWeeklyInDb !== calculatedWeeklyPoints) {
           updatePayload.weeklyPoints = calculatedWeeklyPoints;
           needsUpdate = true;
           result.rankingsFixedCount++;
@@ -419,13 +447,23 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
             // ignora erro em bonus individual
           }
         }
-      } catch (clientErr) {
+      } catch (clientErr: any) {
         result.errorsCount++;
-        console.warn(`Erro ao reconciliar cliente ${client.id}:`, clientErr);
+        const cMsg = String(clientErr?.message || clientErr?.code || clientErr || '').toLowerCase();
+        if (!cMsg.includes('permission') && !cMsg.includes('insufficient') && clientErr?.code !== 'permission-denied') {
+          console.warn(`Erro ao reconciliar cliente ${client.id}:`, clientErr);
+        }
       }
     }
   } catch (err: any) {
-    if (err?.code === 'permission-denied' || String(err?.message || '').toLowerCase().includes('permission')) {
+    const errMsg = String(err?.message || err?.code || err || '').toLowerCase();
+    const isPermissionIssue = 
+      err?.code === 'permission-denied' || 
+      errMsg.includes('permission') || 
+      errMsg.includes('insufficient') ||
+      errMsg.includes('unauthorized');
+
+    if (isPermissionIssue) {
       console.info('Reconciliação global suspensa: usuário atual não possui privilégios de administrador.');
     } else {
       console.error('Erro global na reconciliação de pontuações e ranking:', err);
@@ -464,7 +502,7 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
   customStartIso?: string;
   thresholds?: number[];
 }): Promise<RestoreWeeklyResult> {
-  // 1. Determina a data de início da semana corrente (Segunda-feira às 00:00:00)
+  // 1. Determina a data de início da semana corrente
   const now = new Date();
   const day = now.getDay();
   const daysSinceMonday = (day + 6) % 7;
@@ -474,41 +512,32 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
   startOfMonday.setMilliseconds(0);
 
   let targetStartMs = startOfMonday.getTime();
+
+  try {
+    const gSnap = await getDoc(doc(db, 'settings', 'gamification'));
+    if (gSnap.exists()) {
+      const gData = gSnap.data();
+      if (gData.lastWeekClosedAt) {
+        const closedMs = parseDateToMs(gData.lastWeekClosedAt);
+        const oct4EndMs = new Date('2026-10-04T23:59:59.999Z').getTime();
+        const effectiveMs = Math.max(closedMs, oct4EndMs);
+        if (effectiveMs > 0 && effectiveMs <= now.getTime()) {
+          targetStartMs = effectiveMs;
+        }
+      }
+    }
+  } catch (gErr: any) {
+    // ignora erro ao ler settings
+  }
+
   if (options?.customStartIso) {
     const customMs = parseDateToMs(options.customStartIso);
     if (customMs > 0) targetStartMs = customMs;
   }
 
-  // Garantia: a semana em questão (iniciada em 28/09/2026) não pode ser posterior a 28/09/2026
-  const sept28Ms = new Date('2026-09-28T00:00:00.000Z').getTime();
-  if (targetStartMs > sept28Ms && now.getTime() >= sept28Ms) {
-    targetStartMs = sept28Ms;
-  }
-
   const weekStartIso = new Date(targetStartMs).toISOString();
 
-  // 2. Corrigir settings/gamification se contiver encerramento indevido de 04/10/2026
-  try {
-    const gSnap = await getDoc(doc(db, 'settings', 'gamification'));
-    if (gSnap.exists()) {
-      const gData = gSnap.data();
-      const closedMs = parseDateToMs(gData.lastWeekClosedAt);
-      const isAccidental = closedMs >= new Date('2026-10-04T00:00:00.000Z').getTime();
-      const hasZeroPodium = Array.isArray(gData.lastWeekPodium) && gData.lastWeekPodium.every((p: any) => (p.points || 0) === 0);
-
-      if (isAccidental || hasZeroPodium) {
-        await updateDoc(doc(db, 'settings', 'gamification'), {
-          lastWeekClosedAt: weekStartIso,
-          lastWeekPodium: [],
-          lastWeekRanking: []
-        });
-      }
-    }
-  } catch (gErr) {
-    console.warn('Aviso ao sincronizar settings/gamification:', gErr);
-  }
-
-  // 3. Obter thresholds para patente
+  // 2. Obter thresholds para patente
   const thresholdsToUse = options?.thresholds && options.thresholds.length >= 8 
     ? options.thresholds 
     : (getActiveThresholds() || DEFAULT_THRESHOLDS);
@@ -615,12 +644,9 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
 
     calculatedWeekly = Math.max(0, calculatedWeekly);
 
-    // Se o cliente tem pontos calculados desta semana OU se já tinha weeklyPoints legítimos
-    const finalWeekly = calculatedWeekly > 0 
-      ? Math.max(calculatedWeekly, client.weeklyPoints || 0)
-      : (client.weeklyPoints || 0);
-
-    const needsDbUpdate = finalWeekly > 0 && (client.weeklyPoints !== finalWeekly);
+    const finalWeekly = calculatedWeekly;
+    const currentWeeklyInDb = Number(client.weeklyPoints || 0);
+    const needsDbUpdate = currentWeeklyInDb !== finalWeekly;
 
     if (needsDbUpdate) {
       try {
@@ -630,8 +656,11 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
         });
         updatedCount++;
         totalPointsRestored += finalWeekly;
-      } catch (upErr) {
-        console.warn(`Aviso ao atualizar weeklyPoints do cliente ${client.id}:`, upErr);
+      } catch (upErr: any) {
+        const uMsg = String(upErr?.message || upErr?.code || upErr || '').toLowerCase();
+        if (!uMsg.includes('permission') && !uMsg.includes('insufficient') && upErr?.code !== 'permission-denied') {
+          console.warn(`Aviso ao atualizar weeklyPoints do cliente ${client.id}:`, upErr);
+        }
       }
     }
 
@@ -642,7 +671,7 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
   }
 
   // Ordenar competidores do ranking
-  const activeCompetitors = updatedClients.filter(c => (c.weeklyPoints || 0) > 0);
+  const activeCompetitors = updatedClients.filter(c => Number(c.weeklyPoints || 0) > 0);
   activeCompetitors.sort(compareClientsForRanking);
 
   const topRanked = activeCompetitors.slice(0, 5).map((c, idx) => {

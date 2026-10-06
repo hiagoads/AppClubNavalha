@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, query, where, getDocs, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { BookingStatus, Booking } from '../types';
@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter, ArrowUpDown } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter, ArrowUpDown, BadgeCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { useBarbers } from '../hooks/useBarbers';
@@ -25,12 +25,16 @@ type PeriodType = 'day' | 'week' | 'month' | 'period';
 
 const getServiceTime = (b: any) => {
   let time = 0;
-  if (b.estimatedEndTime) {
+  if (b.paidAt) {
+     time = typeof b.paidAt === 'number' ? b.paidAt : (typeof (b.paidAt as any).toMillis === 'function' ? (b.paidAt as any).toMillis() : new Date(b.paidAt).getTime());
+  } else if (b.estimatedEndTime) {
      time = typeof b.estimatedEndTime === 'number' ? b.estimatedEndTime : (typeof (b.estimatedEndTime as any).toMillis === 'function' ? (b.estimatedEndTime as any).toMillis() : new Date(b.estimatedEndTime).getTime());
+  } else if (b.updatedAt) {
+     time = typeof b.updatedAt === 'number' ? b.updatedAt : (typeof (b.updatedAt as any).toMillis === 'function' ? (b.updatedAt as any).toMillis() : new Date(b.updatedAt).getTime());
   } else if (b.createdAt) {
      time = typeof b.createdAt === 'number' ? b.createdAt : (typeof (b.createdAt as any).toMillis === 'function' ? (b.createdAt as any).toMillis() : new Date(b.createdAt).getTime());
   }
-  return time;
+  return time || 0;
 };
 
 const getPaymentTime = (b: any) => {
@@ -63,16 +67,64 @@ export default function BillingView() {
   const [listPaymentFilter, setListPaymentFilter] = useState<'all' | 'paid' | 'credit'>('all');
   const [listServiceFilter, setListServiceFilter] = useState('');
   const [listSortBy, setListSortBy] = useState<'date-desc' | 'date-asc' | 'value-desc' | 'value-asc'>('date-desc');
+  const [clients, setClients] = useState<any[]>([]);
 
   useEffect(() => {
     // Listen to completed bookings
     const q = query(collection(db, 'bookings'), where('status', '==', BookingStatus.COMPLETED));
-    const unsubscribe = onSnapshot(q, (snap) => {
+    const unsubscribeBookings = onSnapshot(q, (snap) => {
        const docs = snap.docs.map(d => ({id: d.id, ...d.data()} as Booking));
        setBookings(docs);
     }, (err) => { if(err.code !== "permission-denied") console.error(err); });
-    return () => unsubscribe();
+
+    // Listen to registered Clube Navalha clients for verified match
+    const unsubscribeClients = onSnapshot(collection(db, 'clients'), (snap) => {
+      const cDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setClients(cDocs);
+    }, (err) => { if(err.code !== "permission-denied") console.error(err); });
+
+    return () => {
+      unsubscribeBookings();
+      unsubscribeClients();
+    };
   }, []);
+
+  const { clientById, clientByCleanPhone, clientByName } = useMemo(() => {
+    const byId: Record<string, any> = {};
+    const byPhone: Record<string, any> = {};
+    const byName: Record<string, any> = {};
+
+    clients.forEach(c => {
+      byId[c.id] = c;
+      const cp = (c.whatsapp || '').replace(/\D/g, '');
+      if (cp && cp.length >= 8) byPhone[cp] = c;
+      if (c.username) byName[c.username.trim().toLowerCase()] = c;
+      if (c.firstName) byName[c.firstName.trim().toLowerCase()] = c;
+      const fullName = `${c.firstName || ''} ${c.lastName || ''}`.trim().toLowerCase();
+      if (fullName) byName[fullName] = c;
+    });
+
+    return { clientById: byId, clientByCleanPhone: byPhone, clientByName: byName };
+  }, [clients]);
+
+  const getClientForBooking = useCallback((b?: Booking | null) => {
+    if (!b) return null;
+    if (b.clientId && clientById[b.clientId]) return clientById[b.clientId];
+    if (b.awardedClientId && clientById[b.awardedClientId]) return clientById[b.awardedClientId];
+    if (b.clientWhatsapp) {
+      const clean = String(b.clientWhatsapp).replace(/\D/g, '');
+      if (clean && clean.length >= 8) {
+        if (clientByCleanPhone[clean]) return clientByCleanPhone[clean];
+        const found = Object.keys(clientByCleanPhone).find(p => p.length >= 8 && (p.endsWith(clean) || clean.endsWith(p)));
+        if (found) return clientByCleanPhone[found];
+      }
+    }
+    if (b.clientName) {
+      const nameLower = String(b.clientName).trim().toLowerCase();
+      if (clientByName[nameLower]) return clientByName[nameLower];
+    }
+    return null;
+  }, [clientById, clientByCleanPhone, clientByName]);
 
   const getBookingPrice = (b: Booking) => {
      if (b.price !== undefined && b.price !== null && parsePrice(b.price) > 0) return parsePrice(b.price);
@@ -417,8 +469,15 @@ export default function BillingView() {
 
   const displayBookings = [...filtered]
     .filter(b => {
-      if (listSearch && !b.clientName.toLowerCase().includes(listSearch.toLowerCase())) {
-        return false;
+      if (listSearch) {
+        const searchLower = listSearch.trim().toLowerCase();
+        const matchesName = b.clientName.toLowerCase().includes(searchLower);
+        const clubClient = getClientForBooking(b);
+        const matchesUsername = clubClient?.username && (
+          `@${clubClient.username.toLowerCase()}`.includes(searchLower) ||
+          clubClient.username.toLowerCase().includes(searchLower)
+        );
+        if (!matchesName && !matchesUsername) return false;
       }
       if (listPaymentFilter === 'paid' && b.isPaid === false) return false;
       if (listPaymentFilter === 'credit' && b.isPaid !== false) return false;
@@ -766,6 +825,7 @@ export default function BillingView() {
                   const bId = b.barberId || 'any';
                   const barberObj = barbers.find(x => x.id === bId);
                   const barberName = barberObj ? barberObj.name : (bId === 'any' ? 'Não Atribuído' : 'Outro');
+                  const clubClient = getClientForBooking(b);
 
                   return (
                     <div 
@@ -777,9 +837,18 @@ export default function BillingView() {
                       className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-white/5 rounded-xl border border-white/5 cursor-pointer hover:bg-white/10 transition-colors"
                     >
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-medium text-white">{b.clientName}</p>
-                          <Info className="w-4 h-4 text-white/30" />
+                          {clubClient && (
+                            <span 
+                              className="inline-flex items-center gap-1 text-[11px] font-mono text-gold/85 bg-gold/10 border border-gold/25 px-1.5 py-0.5 rounded-md shrink-0" 
+                              title={`Cliente verificado no Clube Navalha (@${(clubClient.username || '').replace(/^@/, '')})`}
+                            >
+                              <BadgeCheck className="w-3.5 h-3.5 text-gold shrink-0 fill-gold/20" />
+                              <span>@{clubClient.username ? clubClient.username.replace(/^@/, '') : (clubClient.firstName || 'clube')}</span>
+                            </span>
+                          )}
+                          <Info className="w-4 h-4 text-white/30 shrink-0" />
                         </div>
                         <p className="text-sm text-white/50">{b.serviceId}</p>
                         <p className={`text-[10px] font-bold uppercase tracking-widest mt-1 ${bId === 'any' ? 'text-red-400' : 'text-gold'}`}>{barberName}</p>
@@ -992,7 +1061,22 @@ export default function BillingView() {
               <div className="space-y-4">
                 <div className="flex justify-between items-center border-b border-white/10 pb-4">
                   <span className="text-white/50">Nome</span>
-                  <span className="font-bold text-white">{selectedClient.clientName}</span>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <span className="font-bold text-white">{selectedClient.clientName}</span>
+                    {(() => {
+                      const selClub = getClientForBooking(selectedClient);
+                      if (!selClub) return null;
+                      return (
+                        <span 
+                          className="inline-flex items-center gap-1 text-xs font-mono text-gold bg-gold/10 border border-gold/30 px-2 py-0.5 rounded-md"
+                          title={`Conta verificada no Clube Navalha: @${selClub.username}`}
+                        >
+                          <BadgeCheck className="w-3.5 h-3.5 text-gold shrink-0 fill-gold/20" />
+                          <span>@{selClub.username ? selClub.username.replace(/^@/, '') : (selClub.firstName || 'clube')}</span>
+                        </span>
+                      );
+                    })()}
+                  </div>
                 </div>
                 
                 <div className="flex flex-col border-b border-white/10 pb-4">
