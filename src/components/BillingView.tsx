@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter, ArrowUpDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { useBarbers } from '../hooks/useBarbers';
@@ -62,6 +62,7 @@ export default function BillingView() {
   const [listSearch, setListSearch] = useState('');
   const [listPaymentFilter, setListPaymentFilter] = useState<'all' | 'paid' | 'credit'>('all');
   const [listServiceFilter, setListServiceFilter] = useState('');
+  const [listSortBy, setListSortBy] = useState<'date-desc' | 'date-asc' | 'value-desc' | 'value-asc'>('date-desc');
 
   useEffect(() => {
     // Listen to completed bookings
@@ -414,17 +415,37 @@ export default function BillingView() {
     }
   };
 
-  const displayBookings = filtered.filter(b => {
-    if (listSearch && !b.clientName.toLowerCase().includes(listSearch.toLowerCase())) {
-      return false;
-    }
-    if (listPaymentFilter === 'paid' && b.isPaid === false) return false;
-    if (listPaymentFilter === 'credit' && b.isPaid !== false) return false;
-    if (listServiceFilter && (!b.serviceId || !b.serviceId.toLowerCase().includes(listServiceFilter.trim().toLowerCase()))) {
-      return false;
-    }
-    return true;
-  });
+  const displayBookings = [...filtered]
+    .filter(b => {
+      if (listSearch && !b.clientName.toLowerCase().includes(listSearch.toLowerCase())) {
+        return false;
+      }
+      if (listPaymentFilter === 'paid' && b.isPaid === false) return false;
+      if (listPaymentFilter === 'credit' && b.isPaid !== false) return false;
+      if (listServiceFilter && (!b.serviceId || !b.serviceId.toLowerCase().includes(listServiceFilter.trim().toLowerCase()))) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (listSortBy === 'date-desc') {
+        return getServiceTime(b) - getServiceTime(a);
+      }
+      if (listSortBy === 'date-asc') {
+        return getServiceTime(a) - getServiceTime(b);
+      }
+      if (listSortBy === 'value-desc') {
+        const diff = getBookingPrice(b) - getBookingPrice(a);
+        if (diff !== 0) return diff;
+        return getServiceTime(b) - getServiceTime(a);
+      }
+      if (listSortBy === 'value-asc') {
+        const diff = getBookingPrice(a) - getBookingPrice(b);
+        if (diff !== 0) return diff;
+        return getServiceTime(b) - getServiceTime(a);
+      }
+      return 0;
+    });
 
   let totalServiceFilteredQty = 0;
   if (listServiceFilter) {
@@ -623,11 +644,14 @@ export default function BillingView() {
         </div>
 
         <div className="mt-8">
-           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-             <h3 className="text-xl font-display font-bold">Clientes Atendidos</h3>
+           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+             <div>
+               <h3 className="text-xl font-display font-bold">Clientes Atendidos</h3>
+               <p className="text-xs text-white/40 mt-0.5">Histórico de atendimentos concluídos no período</p>
+             </div>
              
-             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-               <div className="relative">
+             <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
+               <div className="relative flex-1 sm:flex-initial min-w-[150px]">
                  <Search className="w-4 h-4 text-white/40 absolute left-3 top-1/2 transform -translate-y-1/2" />
                  <input
                    type="text"
@@ -641,7 +665,7 @@ export default function BillingView() {
                <select
                  value={listPaymentFilter}
                  onChange={(e) => setListPaymentFilter(e.target.value as any)}
-                 className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none w-full sm:w-auto"
+                 className="px-3.5 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none flex-1 sm:flex-initial cursor-pointer"
                >
                  <option value="all" className="bg-[#121212] text-white">Status de Pagamento</option>
                  <option value="paid" className="bg-[#121212] text-white">Pagos</option>
@@ -651,14 +675,70 @@ export default function BillingView() {
                <select
                  value={listServiceFilter}
                  onChange={(e) => setListServiceFilter(e.target.value)}
-                 className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none w-full sm:w-auto"
+                 className="px-3.5 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-gold/50 appearance-none flex-1 sm:flex-initial cursor-pointer"
                >
                  <option value="" className="bg-[#121212] text-white">Todos os Serviços</option>
                  {services.map(s => (
                    <option key={s.id} value={s.name} className="bg-[#121212] text-white">{s.name}</option>
                  ))}
                </select>
+
+               {/* Seletor de Ordenação por Data ou Valor */}
+               <div className="relative flex-1 sm:flex-initial">
+                 <select
+                   value={listSortBy}
+                   onChange={(e) => setListSortBy(e.target.value as any)}
+                   className="pl-3.5 pr-8 py-2 bg-white/5 border border-gold/30 rounded-xl text-sm text-gold focus:outline-none focus:border-gold appearance-none w-full cursor-pointer font-medium"
+                   title="Ordenar clientes atendidos"
+                 >
+                   <option value="date-desc" className="bg-[#121212] text-white">Data (Mais recentes)</option>
+                   <option value="date-asc" className="bg-[#121212] text-white">Data (Mais antigos)</option>
+                   <option value="value-desc" className="bg-[#121212] text-white">Valor (Maior valor)</option>
+                   <option value="value-asc" className="bg-[#121212] text-white">Valor (Menor valor)</option>
+                 </select>
+                 <ArrowUpDown className="w-3.5 h-3.5 text-gold/70 absolute right-2.5 top-1/2 transform -translate-y-1/2 pointer-events-none" />
+               </div>
              </div>
+           </div>
+
+           {/* Barra de Ações Rápidas de Ordenação */}
+           <div className="flex items-center gap-2 mb-4 p-2.5 bg-white/[0.03] border border-white/5 rounded-xl flex-wrap">
+             <span className="text-xs text-white/40 flex items-center gap-1.5 pl-1 font-medium">
+               <ArrowUpDown className="w-3.5 h-3.5 text-gold" />
+               Ordenar por:
+             </span>
+             <button
+               type="button"
+               onClick={() => setListSortBy(prev => prev === 'date-desc' ? 'date-asc' : 'date-desc')}
+               className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                 listSortBy.startsWith('date')
+                   ? 'bg-gold text-carbon shadow-sm shadow-gold/20'
+                   : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'
+               }`}
+               title="Alternar ordem de data"
+             >
+               <Calendar className="w-3.5 h-3.5" />
+               <span>Data</span>
+               <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${listSortBy.startsWith('date') ? 'bg-carbon/20 text-carbon' : 'bg-white/10 text-white/50'}`}>
+                 {listSortBy === 'date-desc' ? 'Mais recentes ↓' : listSortBy === 'date-asc' ? 'Mais antigos ↑' : 'Recentes'}
+               </span>
+             </button>
+             <button
+               type="button"
+               onClick={() => setListSortBy(prev => prev === 'value-desc' ? 'value-asc' : 'value-desc')}
+               className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                 listSortBy.startsWith('value')
+                   ? 'bg-gold text-carbon shadow-sm shadow-gold/20'
+                   : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'
+               }`}
+               title="Alternar ordem de valor"
+             >
+               <DollarSign className="w-3.5 h-3.5" />
+               <span>Valor dos Serviços</span>
+               <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${listSortBy.startsWith('value') ? 'bg-carbon/20 text-carbon' : 'bg-white/10 text-white/50'}`}>
+                 {listSortBy === 'value-desc' ? 'Maior valor ↓' : listSortBy === 'value-asc' ? 'Menor valor ↑' : 'Maior valor'}
+               </span>
+             </button>
            </div>
 
            {(listSearch || listPaymentFilter !== 'all' || listServiceFilter) && (
