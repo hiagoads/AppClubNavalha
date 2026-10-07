@@ -46,7 +46,7 @@ export function GamificationManager() {
   const [isAdding, setIsAdding] = useState(false);
 
   const [pointAction, setPointAction] = useState<'add'|'remove'>('remove');
-  const [pointScope, setPointScope] = useState<'all_balances' | 'balance_only' | 'custom_direct'>('all_balances');
+  const [pointScope, setPointScope] = useState<'weekly_only' | 'seasonal_only' | 'all_balances' | 'balance_only' | 'custom_direct'>('weekly_only');
   const [customDirectPts, setCustomDirectPts] = useState('');
   const [customDirectSeasonal, setCustomDirectSeasonal] = useState('');
   const [customDirectWeekly, setCustomDirectWeekly] = useState('');
@@ -923,7 +923,7 @@ export function GamificationManager() {
       const currentWeekly = Math.max(0, clientData.weeklyPoints ?? 0);
       const currentLifetime = Math.max(0, clientData.lifetimePoints ?? Math.max(currentPts, currentSeasonal));
 
-      let newPts = 0;
+      let newPts = currentPts;
       let newSeasonal = currentSeasonal;
       let newWeekly = currentWeekly;
       let newLifetime = currentLifetime;
@@ -944,43 +944,69 @@ export function GamificationManager() {
         highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
           ? clientData.manualTierLevel
           : tierInfo.tierLevel;
-        deltaPoints = newPts - currentPts;
+        
+        const bChange = newPts - currentPts;
+        const wChange = newWeekly - currentWeekly;
+        const sChange = newSeasonal - currentSeasonal;
+        deltaPoints = bChange !== 0 ? bChange : (wChange !== 0 ? wChange : sChange);
       } else {
         const pts = parseInt(pointsToAdd);
-        if (pointAction === 'add') {
-          newPts = currentPts + pts;
-          deltaPoints = pts;
-
-          if (isReversionAll) {
+        if (pointScope === 'weekly_only') {
+          if (pointAction === 'add') {
+            newWeekly = currentWeekly + pts;
+            deltaPoints = pts;
+          } else {
+            newWeekly = Math.max(0, currentWeekly - pts);
+            deltaPoints = -(currentWeekly - newWeekly);
+          }
+        } else if (pointScope === 'seasonal_only') {
+          if (pointAction === 'add') {
+            newSeasonal = currentSeasonal + pts;
+            newLifetime = Math.max(currentLifetime, newSeasonal);
+            seasonHighest = Math.max(seasonHighest, newSeasonal);
+            deltaPoints = pts;
+          } else {
+            newSeasonal = Math.max(0, currentSeasonal - pts);
+            deltaPoints = -(currentSeasonal - newSeasonal);
+          }
+          const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
+          highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+            ? clientData.manualTierLevel
+            : tierInfo.tierLevel;
+        } else if (pointScope === 'balance_only') {
+          if (pointAction === 'add') {
+            newPts = currentPts + pts;
+            deltaPoints = pts;
+          } else {
+            newPts = Math.max(0, currentPts - pts);
+            deltaPoints = -(currentPts - newPts);
+          }
+        } else if (pointScope === 'all_balances') {
+          if (pointAction === 'add') {
+            newPts = currentPts + pts;
             newSeasonal = currentSeasonal + pts;
             newWeekly = currentWeekly + pts;
             newLifetime = currentLifetime + pts;
             seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
-            const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
-            highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
-              ? clientData.manualTierLevel
-              : tierInfo.tierLevel;
-          }
-        } else {
-          // Remoção com piso zero estrito
-          newPts = Math.max(0, currentPts - pts);
-          deltaPoints = -(currentPts - newPts);
-
-          if (isReversionAll) {
+            deltaPoints = pts;
+          } else {
+            newPts = Math.max(0, currentPts - pts);
             newSeasonal = Math.max(0, currentSeasonal - pts);
             newWeekly = Math.max(0, currentWeekly - pts);
             newLifetime = Math.max(0, currentLifetime - pts);
             seasonHighest = Math.max(0, newSeasonal, newPts);
-            const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
-            highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
-              ? clientData.manualTierLevel
-              : tierInfo.tierLevel;
-          } else {
-            newSeasonal = currentSeasonal;
-            newWeekly = currentWeekly;
+            deltaPoints = -(currentPts - newPts);
           }
+          const tierInfo = getLevelTier(seasonHighest, tierThresholds, 1);
+          highestTier = (clientData.manualTierOverride && typeof clientData.manualTierLevel === 'number')
+            ? clientData.manualTierLevel
+            : tierInfo.tierLevel;
         }
       }
+
+      const balanceChange = newPts - currentPts;
+      const seasonalChange = newSeasonal - currentSeasonal;
+      const weeklyChange = newWeekly - currentWeekly;
 
       const nowIso = new Date().toISOString();
 
@@ -1022,9 +1048,28 @@ export function GamificationManager() {
         ? 'reverted'
         : (isCustomDirect ? 'correction' : (pointAction === 'add' ? 'manual_add' : 'manual_remove'));
 
-      const defaultDesc = isReversionAll
-        ? (pointAction === 'add' ? 'Ajuste de Pontuação em Todos os Saldos' : 'Estorno por Erro de Sistema (Todos os Saldos)')
-        : (isCustomDirect ? 'Ajuste Direto de Saldos' : (pointAction === 'add' ? 'Bônus Manual de Saldo Gastável' : 'Remoção Manual de Saldo Gastável'));
+      let defaultDesc = 'Ajuste de Pontos';
+      if (pointScope === 'weekly_only') {
+        defaultDesc = weeklyChange >= 0
+          ? `Ajuste manual: +${weeklyChange} pts no Ranking Semanal`
+          : `Ajuste manual: ${weeklyChange} pts no Ranking Semanal`;
+      } else if (pointScope === 'seasonal_only') {
+        defaultDesc = seasonalChange >= 0
+          ? `Ajuste manual: +${seasonalChange} pts na Temporada`
+          : `Ajuste manual: ${seasonalChange} pts na Temporada`;
+      } else if (pointScope === 'balance_only') {
+        defaultDesc = pointAction === 'add' ? 'Bônus Manual de Saldo Gastável' : 'Remoção Manual de Saldo Gastável';
+      } else if (pointScope === 'all_balances') {
+        defaultDesc = pointAction === 'add' ? 'Ajuste de Pontuação em Todos os Saldos' : 'Estorno por Erro de Sistema (Todos os Saldos)';
+      } else if (pointScope === 'custom_direct') {
+        if (balanceChange === 0 && weeklyChange !== 0 && seasonalChange === 0) {
+          defaultDesc = weeklyChange >= 0
+            ? `Correção de auditoria: +${weeklyChange} pts no Ranking Semanal`
+            : `Correção de auditoria: ${weeklyChange} pts no Ranking Semanal`;
+        } else {
+          defaultDesc = `Definição direta de saldos (Saldo: ${newPts}, Temp: ${newSeasonal}, Semana: ${newWeekly})`;
+        }
+      }
 
       const txDateIso = nowIso;
 
@@ -1034,6 +1079,11 @@ export function GamificationManager() {
         points: deltaPoints,
         type: txType,
         scope: pointScope,
+        weeklyPointsChange: weeklyChange,
+        seasonalPointsChange: seasonalChange,
+        balancePointsChange: balanceChange,
+        weeklyBalanceAfter: newWeekly,
+        seasonalBalanceAfter: newSeasonal,
         description: addDescription || defaultDesc,
         balanceAfter: newPts,
         createdAt: txDateIso
@@ -2390,22 +2440,22 @@ export function GamificationManager() {
                   <label className="text-[10px] uppercase font-bold text-white/50 block">
                     Tipo de Ajuste
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                     <button
                       type="button"
-                      onClick={() => setPointScope('all_balances')}
+                      onClick={() => setPointScope('weekly_only')}
                       className={`p-2 rounded-xl border text-left transition-all ${
-                        pointScope === 'all_balances'
-                          ? 'bg-rose-500/20 border-rose-500/50 text-white shadow-lg shadow-rose-950/20'
+                        pointScope === 'weekly_only'
+                          ? 'bg-cyan-500/20 border-cyan-500/50 text-white shadow-lg shadow-cyan-950/20'
                           : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
                       }`}
                     >
-                      <div className="flex items-center gap-1 font-bold text-xs text-rose-300">
-                        <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                        <span>Reversão de Erro</span>
+                      <div className="flex items-center gap-1 font-bold text-xs text-cyan-300">
+                        <Trophy className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Ranking Semanal</span>
                       </div>
                       <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
-                        Estorna Saldo, Temporada e Semana, recalculando Patente.
+                        Altera apenas pontos da semana (ranking). Saldo e Temporada intactos.
                       </p>
                     </button>
 
@@ -2423,7 +2473,43 @@ export function GamificationManager() {
                         <span>Apenas Saldo Atual</span>
                       </div>
                       <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
-                        Altera saldo gastável. Preserva temporada e ranking intactos.
+                        Altera saldo gastável (resgates). Preserva temporada e ranking intactos.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPointScope('seasonal_only')}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        pointScope === 'seasonal_only'
+                          ? 'bg-purple-500/20 border-purple-500/50 text-white shadow-lg shadow-purple-950/20'
+                          : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-bold text-xs text-purple-300">
+                        <Crown className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Apenas Temporada</span>
+                      </div>
+                      <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
+                        Altera pontos da temporada e patente. Saldo e semana intactos.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPointScope('all_balances')}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        pointScope === 'all_balances'
+                          ? 'bg-rose-500/20 border-rose-500/50 text-white shadow-lg shadow-rose-950/20'
+                          : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-bold text-xs text-rose-300">
+                        <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Reversão de Erro</span>
+                      </div>
+                      <p className="text-[10px] text-white/50 mt-0.5 leading-tight">
+                        Estorna Saldo, Temporada e Semana, recalculando Patente.
                       </p>
                     </button>
 

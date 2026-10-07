@@ -20,7 +20,9 @@ import {
   RotateCcw,
   Sliders,
   Layers,
-  Zap
+  Zap,
+  Trophy,
+  Coins
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -53,8 +55,8 @@ export function ClientPointsAuditModal({
   // Manual Quick Adjustment inside Modal
   const [showAdjustForm, setShowAdjustForm] = useState(false);
   const [adjPoints, setAdjPoints] = useState('');
-  const [adjAction, setAdjAction] = useState<'add' | 'remove'>('remove');
-  const [adjScope, setAdjScope] = useState<'balance_only' | 'all_balances' | 'custom_direct'>('all_balances');
+  const [adjAction, setAdjAction] = useState<'add' | 'remove'>('add');
+  const [adjScope, setAdjScope] = useState<'weekly_only' | 'seasonal_only' | 'balance_only' | 'all_balances' | 'custom_direct'>('weekly_only');
   const [adjReason, setAdjReason] = useState('');
   const [customDirectPts, setCustomDirectPts] = useState('');
   const [customDirectSeasonal, setCustomDirectSeasonal] = useState('');
@@ -141,6 +143,18 @@ export function ClientPointsAuditModal({
       resPts = Math.max(0, parseInt(customDirectPts) || 0);
       resSeasonal = Math.max(0, parseInt(customDirectSeasonal) || 0);
       resWeekly = Math.max(0, parseInt(customDirectWeekly) || 0);
+    } else if (adjScope === 'weekly_only') {
+      if (adjAction === 'add') {
+        resWeekly = curWeekly + pts;
+      } else {
+        resWeekly = Math.max(0, curWeekly - pts);
+      }
+    } else if (adjScope === 'seasonal_only') {
+      if (adjAction === 'add') {
+        resSeasonal = curSeasonal + pts;
+      } else {
+        resSeasonal = Math.max(0, curSeasonal - pts);
+      }
     } else if (adjScope === 'all_balances') {
       if (adjAction === 'add') {
         resPts = curPts + pts;
@@ -250,13 +264,12 @@ export function ClientPointsAuditModal({
       const currentWeekly = data.weeklyPoints ?? 0;
       const currentLifetime = data.lifetimePoints ?? Math.max(currentPts, currentSeasonal);
 
-      let newPts = 0;
+      let newPts = currentPts;
       let newSeasonal = currentSeasonal;
       let newWeekly = currentWeekly;
       let newLifetime = currentLifetime;
       let seasonHighest = Math.max(data.seasonHighestPoints ?? 0, data.highestSeasonalPoints ?? 0, currentSeasonal, currentPts);
       let highestTier = data.seasonHighestTierLevel ?? data.highestTierLevel ?? 1;
-      let pointsChange = 0;
 
       const isReversionAll = adjScope === 'all_balances';
       const isCustomDirect = adjScope === 'custom_direct';
@@ -266,49 +279,71 @@ export function ClientPointsAuditModal({
         newSeasonal = Math.max(0, parseInt(customDirectSeasonal) || 0);
         newWeekly = Math.max(0, parseInt(customDirectWeekly) || 0);
         newLifetime = Math.max(currentLifetime, newSeasonal, newPts);
-        seasonHighest = Math.max(0, newSeasonal, newPts);
+        seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
         const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
         highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
           ? data.manualTierLevel
           : tierInfo.tierLevel;
-        pointsChange = newPts - currentPts;
       } else {
         const pts = parseInt(adjPoints);
-        if (adjAction === 'add') {
-          newPts = currentPts + pts;
-          pointsChange = pts;
-
-          if (isReversionAll) {
+        if (adjScope === 'weekly_only') {
+          if (adjAction === 'add') {
+            newWeekly = currentWeekly + pts;
+          } else {
+            newWeekly = Math.max(0, currentWeekly - pts);
+          }
+        } else if (adjScope === 'seasonal_only') {
+          if (adjAction === 'add') {
+            newSeasonal = currentSeasonal + pts;
+            newLifetime = Math.max(currentLifetime, newSeasonal);
+            seasonHighest = Math.max(seasonHighest, newSeasonal);
+          } else {
+            newSeasonal = Math.max(0, currentSeasonal - pts);
+          }
+          const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+          highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+            ? data.manualTierLevel
+            : tierInfo.tierLevel;
+        } else if (adjScope === 'balance_only') {
+          if (adjAction === 'add') {
+            newPts = currentPts + pts;
+          } else {
+            newPts = Math.max(0, currentPts - pts);
+          }
+        } else if (adjScope === 'all_balances') {
+          if (adjAction === 'add') {
+            newPts = currentPts + pts;
             newSeasonal = currentSeasonal + pts;
             newWeekly = currentWeekly + pts;
             newLifetime = currentLifetime + pts;
             seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
-            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
-            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
-              ? data.manualTierLevel
-              : tierInfo.tierLevel;
-          }
-        } else {
-          // Remover pontos com piso zero estrito
-          newPts = Math.max(0, currentPts - pts);
-          pointsChange = -(currentPts - newPts); // quantidade real debitada
-
-          if (isReversionAll) {
-            // Reversão total / erro de sistema: deduz também de temporada, semana e recalcula patente
+          } else {
+            newPts = Math.max(0, currentPts - pts);
             newSeasonal = Math.max(0, currentSeasonal - pts);
             newWeekly = Math.max(0, currentWeekly - pts);
             newLifetime = Math.max(0, currentLifetime - pts);
-            seasonHighest = Math.max(0, newSeasonal, newPts);
-            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
-            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
-              ? data.manualTierLevel
-              : tierInfo.tierLevel;
-          } else {
-            // Apenas saldo atual (gastável): preserva acumuladores e regra de não-regressão
-            newSeasonal = currentSeasonal;
-            newWeekly = currentWeekly;
           }
+          const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+          highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+            ? data.manualTierLevel
+            : tierInfo.tierLevel;
         }
+      }
+
+      const balanceChange = newPts - currentPts;
+      const seasonalChange = newSeasonal - currentSeasonal;
+      const weeklyChange = newWeekly - currentWeekly;
+
+      let txPoints = balanceChange;
+      if (adjScope === 'weekly_only') {
+        txPoints = weeklyChange;
+      } else if (adjScope === 'seasonal_only') {
+        txPoints = seasonalChange;
+      } else if (adjScope === 'custom_direct') {
+        if (balanceChange !== 0) txPoints = balanceChange;
+        else if (weeklyChange !== 0) txPoints = weeklyChange;
+        else if (seasonalChange !== 0) txPoints = seasonalChange;
+        else txPoints = 0;
       }
 
       const nowIso = new Date().toISOString();
@@ -349,22 +384,50 @@ export function ClientPointsAuditModal({
 
       await updateDoc(clientRef, updateData);
 
-      const txType = isReversionAll && adjAction === 'remove'
-        ? 'reverted'
-        : (isCustomDirect ? 'correction' : (adjAction === 'add' ? 'manual_add' : 'manual_remove'));
+      let defaultDesc = 'Ajuste de Pontos';
+      if (adjScope === 'weekly_only') {
+        defaultDesc = weeklyChange >= 0
+          ? `Ajuste manual: +${weeklyChange} pts no Ranking Semanal`
+          : `Ajuste manual: ${weeklyChange} pts no Ranking Semanal`;
+      } else if (adjScope === 'seasonal_only') {
+        defaultDesc = seasonalChange >= 0
+          ? `Ajuste manual: +${seasonalChange} pts na Temporada`
+          : `Ajuste manual: ${seasonalChange} pts na Temporada`;
+      } else if (adjScope === 'balance_only') {
+        defaultDesc = balanceChange >= 0
+          ? `Crédito de Saldo Gastável (+${balanceChange} pts)`
+          : `Débito de Saldo Gastável (${balanceChange} pts)`;
+      } else if (adjScope === 'all_balances') {
+        defaultDesc = balanceChange >= 0
+          ? `Ajuste em Todos os Saldos (+${balanceChange} pts)`
+          : `Estorno de Erro em Todos os Saldos (${balanceChange} pts)`;
+      } else if (adjScope === 'custom_direct') {
+        defaultDesc = `Definição direta de saldos (Saldo: ${newPts}, Temp: ${newSeasonal}, Semana: ${newWeekly})`;
+      }
 
-      const defaultDesc = isReversionAll
-        ? (adjAction === 'add' ? 'Ajuste de Pontuação em Todos os Saldos' : 'Estorno por Erro de Sistema (Todos os Saldos)')
-        : (isCustomDirect ? 'Ajuste Direto de Saldos' : (adjAction === 'add' ? 'Ajuste Manual de Saldo Gastável' : 'Débito Manual de Saldo Gastável'));
+      const txDescription = adjReason
+        ? (adjScope === 'all_balances' && adjAction === 'remove' ? `[Reversão de Erro] ${adjReason}` : adjReason)
+        : defaultDesc;
+
+      const txType = adjScope === 'custom_direct'
+        ? 'correction'
+        : (adjScope === 'all_balances' && adjAction === 'remove'
+            ? 'reverted'
+            : (txPoints >= 0 ? 'manual_add' : 'manual_remove'));
 
       await addDoc(collection(db, 'point_transactions'), {
         clientId: activeClient.id,
         clientName: data.username || data.firstName || 'Cliente',
-        points: pointsChange,
+        points: txPoints,
         type: txType,
         scope: adjScope,
-        description: adjReason ? (isReversionAll ? `[Reversão de Erro] ${adjReason}` : adjReason) : defaultDesc,
+        weeklyPointsChange: weeklyChange,
+        seasonalPointsChange: seasonalChange,
+        balancePointsChange: balanceChange,
         balanceAfter: newPts,
+        seasonalBalanceAfter: newSeasonal,
+        weeklyBalanceAfter: newWeekly,
+        description: txDescription,
         createdAt: nowIso
       });
 
@@ -378,7 +441,7 @@ export function ClientPointsAuditModal({
       setCustomDirectWeekly(String(newWeekly));
       if (onClientUpdated) onClientUpdated(updated);
 
-      if (adjAction === 'add' && isReversionAll) {
+      if (adjAction === 'add' && (isReversionAll || adjScope === 'seasonal_only')) {
         const bonusRes = await checkAndSyncClientRankBonuses(activeClient.id, updated, thresholds);
         if (bonusRes && bonusRes.awardedBonuses && bonusRes.awardedBonuses.length > 0) {
           const titles = bonusRes.awardedBonuses.map(b => b.title).join(', ');
@@ -387,11 +450,15 @@ export function ClientPointsAuditModal({
       }
 
       toast.success(
-        isCustomDirect
+        adjScope === 'weekly_only'
+          ? `Ranking semanal atualizado para ${newWeekly} pts!`
+          : adjScope === 'seasonal_only'
+          ? `Pontos de temporada atualizados para ${newSeasonal} pts!`
+          : adjScope === 'balance_only'
+          ? `Saldo gastável atualizado para ${newPts} pts!`
+          : adjScope === 'custom_direct'
           ? `Saldos de ${data.username || 'Cliente'} atualizados com sucesso!`
-          : (isReversionAll
-              ? `${adjPoints} pontos ${adjAction === 'add' ? 'adicionados' : 'revertidos'} em todos os saldos com sucesso!`
-              : `${adjPoints} pontos ${adjAction === 'add' ? 'creditados' : 'debitados'} no saldo atual com sucesso!`)
+          : `${adjPoints} pontos ${adjAction === 'add' ? 'adicionados' : 'revertidos'} com sucesso!`
       );
       setAdjPoints('');
       setAdjReason('');
@@ -494,8 +561,29 @@ export function ClientPointsAuditModal({
     .filter(t => (t.points ?? 0) < 0)
     .reduce((sum, t) => sum + Math.abs(t.points), 0);
 
-  const getTransactionBadge = (type?: string, points?: number) => {
-    if ((points ?? 0) < 0) {
+  const getTransactionBadge = (item: PointTransaction) => {
+    const pts = item.points ?? 0;
+    const type = item.type;
+    const scope = (item as any).scope;
+    const weeklyPointsChange = (item as any).weeklyPointsChange;
+    const seasonalPointsChange = (item as any).seasonalPointsChange;
+    const balancePointsChange = (item as any).balancePointsChange;
+
+    if (scope === 'weekly_only' || (typeof weeklyPointsChange === 'number' && weeklyPointsChange !== 0 && !balancePointsChange)) {
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-md">
+          <Trophy className="w-3 h-3" /> Ranking Semanal
+        </span>
+      );
+    }
+    if (scope === 'seasonal_only' || (typeof seasonalPointsChange === 'number' && seasonalPointsChange !== 0 && !balancePointsChange)) {
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-md">
+          <Crown className="w-3 h-3" /> Temporada
+        </span>
+      );
+    }
+    if (pts < 0 && type !== 'correction') {
       return (
         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-md">
           <ArrowDownRight className="w-3 h-3" /> Débito / Resgate
@@ -820,22 +908,22 @@ export function ClientPointsAuditModal({
                 <label className="text-[10px] uppercase font-bold text-white/50 block">
                   Escolha o Tipo de Ajuste
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                   <button
                     type="button"
-                    onClick={() => setAdjScope('all_balances')}
+                    onClick={() => setAdjScope('weekly_only')}
                     className={`p-2.5 rounded-xl border text-left transition-all ${
-                      adjScope === 'all_balances'
-                        ? 'bg-rose-500/20 border-rose-500/50 text-white shadow-lg shadow-rose-950/20'
+                      adjScope === 'weekly_only'
+                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white shadow-lg shadow-cyan-950/20'
                         : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 font-bold text-xs text-rose-300">
-                      <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Reversão de Erro</span>
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-cyan-300">
+                      <Trophy className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Ranking Semanal</span>
                     </div>
                     <p className="text-[10px] text-white/50 mt-1 leading-tight">
-                      Estorno completo de falha: altera Saldo, Temporada, Semana e recalcula Patente.
+                      Altera apenas pontos da semana (ranking). Saldo e Temporada intactos.
                     </p>
                   </button>
 
@@ -853,7 +941,43 @@ export function ClientPointsAuditModal({
                       <span>Apenas Saldo Atual</span>
                     </div>
                     <p className="text-[10px] text-white/50 mt-1 leading-tight">
-                      Altera apenas saldo gastável. Preserva temporada e ranking da semana intactos.
+                      Altera saldo gastável (resgates). Temporada e ranking da semana intactos.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdjScope('seasonal_only')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      adjScope === 'seasonal_only'
+                        ? 'bg-purple-500/20 border-purple-500/50 text-white shadow-lg shadow-purple-950/20'
+                        : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-purple-300">
+                      <Crown className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Apenas Temporada</span>
+                    </div>
+                    <p className="text-[10px] text-white/50 mt-1 leading-tight">
+                      Altera pontos da temporada e patente. Saldo e semana intactos.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdjScope('all_balances')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      adjScope === 'all_balances'
+                        ? 'bg-rose-500/20 border-rose-500/50 text-white shadow-lg shadow-rose-950/20'
+                        : 'bg-white/[0.02] border-white/10 text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-rose-300">
+                      <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Reversão Geral</span>
+                    </div>
+                    <p className="text-[10px] text-white/50 mt-1 leading-tight">
+                      Estorno completo: altera Saldo, Temporada, Semana e Patente.
                     </p>
                   </button>
 
@@ -871,7 +995,7 @@ export function ClientPointsAuditModal({
                       <span>Definir Saldos Exatos</span>
                     </div>
                     <p className="text-[10px] text-white/50 mt-1 leading-tight">
-                      Edite manualmente os 3 saldos exatos do cliente (Saldo, Temporada e Semana).
+                      Edite manualmente os 3 saldos exatos do cliente (Saldo, Temp, Semana).
                     </p>
                   </button>
                 </div>
@@ -906,7 +1030,15 @@ export function ClientPointsAuditModal({
                       type="number"
                       required
                       min="1"
-                      placeholder="Quantidade de pontos (ex: 5000)"
+                      placeholder={
+                        adjScope === 'weekly_only'
+                          ? "Pontos na semana (ex: 500)"
+                          : adjScope === 'seasonal_only'
+                          ? "Pontos na temporada (ex: 500)"
+                          : adjScope === 'balance_only'
+                          ? "Pontos no saldo gastável (ex: 500)"
+                          : "Quantidade de pontos (ex: 500)"
+                      }
                       value={adjPoints}
                       onChange={(e) => setAdjPoints(e.target.value)}
                       className="w-full bg-white/5 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white font-mono placeholder:text-white/30 focus:outline-none focus:border-gold/50"
@@ -1089,7 +1221,10 @@ export function ClientPointsAuditModal({
             <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar pr-1">
               {filteredTransactions.map(item => {
                 const pts = item.points ?? 0;
-                const isPositive = pts > 0;
+                const isWeekly = (item as any).scope === 'weekly_only' || (typeof (item as any).weeklyPointsChange === 'number' && (item as any).weeklyPointsChange !== 0 && !(item as any).balancePointsChange);
+                const isSeasonal = (item as any).scope === 'seasonal_only' || (typeof (item as any).seasonalPointsChange === 'number' && (item as any).seasonalPointsChange !== 0 && !(item as any).balancePointsChange);
+                const displayPts = isWeekly ? ((item as any).weeklyPointsChange ?? pts) : (isSeasonal ? ((item as any).seasonalPointsChange ?? pts) : pts);
+                const isPositive = displayPts > 0;
 
                 return (
                   <div
@@ -1098,7 +1233,7 @@ export function ClientPointsAuditModal({
                   >
                     <div className="min-w-0 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        {getTransactionBadge(item.type, pts)}
+                        {getTransactionBadge(item)}
                         <span className="text-[11px] text-white/40 flex items-center gap-1 font-mono">
                           <Clock className="w-3 h-3 text-white/30" />
                           {item.createdAt ? new Date(item.createdAt).toLocaleString('pt-BR') : '-'}
@@ -1111,15 +1246,31 @@ export function ClientPointsAuditModal({
 
                     <div className="text-right shrink-0">
                       <span className={`font-mono font-bold text-sm block ${
-                        isPositive ? 'text-emerald-400' : 'text-red-400'
+                        isWeekly 
+                          ? 'text-cyan-400' 
+                          : isSeasonal 
+                          ? 'text-purple-400' 
+                          : isPositive 
+                          ? 'text-emerald-400' 
+                          : displayPts === 0 
+                          ? 'text-white/60' 
+                          : 'text-red-400'
                       }`}>
-                        {isPositive ? `+${pts.toLocaleString('pt-BR')}` : pts.toLocaleString('pt-BR')} pts
+                        {isPositive ? `+${displayPts.toLocaleString('pt-BR')}` : displayPts.toLocaleString('pt-BR')} pts {isWeekly ? '(Semana)' : isSeasonal ? '(Temp)' : ''}
                       </span>
-                      {typeof item.balanceAfter === 'number' && (
+                      {isWeekly && typeof (item as any).weeklyBalanceAfter === 'number' ? (
+                        <span className="text-[10px] text-cyan-400/70 font-mono block">
+                          Semana após: {(item as any).weeklyBalanceAfter.toLocaleString('pt-BR')} pts
+                        </span>
+                      ) : isSeasonal && typeof (item as any).seasonalBalanceAfter === 'number' ? (
+                        <span className="text-[10px] text-purple-400/70 font-mono block">
+                          Temp após: {(item as any).seasonalBalanceAfter.toLocaleString('pt-BR')} pts
+                        </span>
+                      ) : typeof item.balanceAfter === 'number' ? (
                         <span className="text-[10px] text-white/30 font-mono block">
                           Saldo após: {item.balanceAfter.toLocaleString('pt-BR')} pts
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 );

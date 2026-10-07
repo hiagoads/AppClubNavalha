@@ -28,6 +28,7 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedSeasonId, setExpandedSeasonId] = useState<string | null>(null);
   const [expandedWeekId, setExpandedWeekId] = useState<string | null>(null);
+  const [expandedCurrentWeekRecorded, setExpandedCurrentWeekRecorded] = useState<boolean>(false);
   const [showLastWeekPodium, setShowLastWeekPodium] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -54,8 +55,6 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
   useEffect(() => {
     if (!isOpen) return;
 
-    loadPastHistory();
-
     // 1. Escuta em tempo real da coleção clients (SEM LIMITES ARBITRÁRIOS)
     setLoading(true);
     const unsubClients = onSnapshot(collection(db, 'clients'), (snap) => {
@@ -66,7 +65,6 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
 
       // Janela da semana atual (atenta à data dos créditos/débitos)
       const { startTime } = getCurrentWeekWindow(lastWeekClosedAt);
-      const weekStartMs = startTime.getTime();
 
       // Filtra competidores da semana:
       // O ranking da semana considera única e exclusivamente a pontuação semanal legítima (weeklyPoints > 0)
@@ -91,64 +89,80 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
       setLoading(false);
     });
 
-    return () => {
-      unsubClients();
-    };
-  }, [isOpen, thresholds, lastWeekClosedAt]);
-
-  const loadPastHistory = async () => {
+    // 2. Escuta em tempo real de semanas arquivadas (past_weeks)
     setLoadingHistory(true);
-    try {
-      // 1. Carregar temporadas arquivadas
-      const qSeasons = query(
-        collection(db, 'past_seasons'),
-        orderBy('seasonNumber', 'desc'),
-        limit(10)
-      );
-      const snapSeasons = await getDocs(qSeasons);
-      const dataSeasons = snapSeasons.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as PastSeason));
-      setPastSeasons(dataSeasons);
-
-      // 2. Carregar semanas arquivadas (para comprovação dos ganhadores semanais)
-      const qWeeks = query(
-        collection(db, 'past_weeks'),
-        orderBy('weekNumber', 'desc'),
-        limit(15)
-      );
-      const snapWeeks = await getDocs(qWeeks);
-      const dataWeeks = snapWeeks.docs.map(doc => ({
+    const unsubWeeks = onSnapshot(collection(db, 'past_weeks'), (snap) => {
+      const weeks = snap.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       } as PastWeek));
-      setPastWeeks(dataWeeks);
-    } catch (e: any) {
-      if (e.code !== 'permission-denied') console.error(e);
-    } finally {
+
+      weeks.sort((a, b) => {
+        const timeA = parseDateToMs(a.closedAt) || parseDateToMs(a.createdAt) || 0;
+        const timeB = parseDateToMs(b.closedAt) || parseDateToMs(b.createdAt) || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        return Number(b.weekNumber || 0) - Number(a.weekNumber || 0);
+      });
+
+      setPastWeeks(weeks);
       setLoadingHistory(false);
-    }
-  };
+    }, (err) => {
+      if (err.code !== 'permission-denied') console.warn('Aviso ao sincronizar past_weeks:', err);
+      setLoadingHistory(false);
+    });
+
+    // 3. Escuta em tempo real de temporadas arquivadas (past_seasons)
+    const unsubSeasons = onSnapshot(collection(db, 'past_seasons'), (snap) => {
+      const seasons = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as PastSeason));
+
+      seasons.sort((a, b) => {
+        return Number(b.seasonNumber || 0) - Number(a.seasonNumber || 0);
+      });
+
+      setPastSeasons(seasons);
+    }, (err) => {
+      if (err.code !== 'permission-denied') console.warn('Aviso ao sincronizar past_seasons:', err);
+    });
+
+    return () => {
+      unsubClients();
+      unsubWeeks();
+      unsubSeasons();
+    };
+  }, [isOpen, thresholds, lastWeekClosedAt]);
 
   if (!isOpen) return null;
 
-  // Pódio oficial da semana anterior: prioriza lastWeekPodium de settings se tiver pontuação legítima (>0)
-  const hasRealPodiumPoints = (lastWeekPodium && lastWeekPodium.length > 0 && lastWeekPodium.some((p: any) => (p.points || 0) > 0));
+  // Pódio oficial da semana anterior:
+  // Prioridade 1: Semana mais recente arquivada (pastWeeks[0].topPodium) - 100% idêntica ao Histórico
+  // Prioridade 2: lastWeekPodium salvo em settings/gamification
+  const latestArchivedWeek = pastWeeks.length > 0 ? pastWeeks[0] : null;
+
+  const podiumFromArchivedWeek = (latestArchivedWeek && Array.isArray(latestArchivedWeek.topPodium) && latestArchivedWeek.topPodium.length > 0)
+    ? latestArchivedWeek.topPodium
+    : null;
+
+  const podiumFromSettings = (Array.isArray(lastWeekPodium) && lastWeekPodium.length > 0)
+    ? lastWeekPodium
+    : null;
+
   const activePastWeekPodium: SeasonPodiumMember[] = 
-    hasRealPodiumPoints
-      ? lastWeekPodium
-      : (pastWeeks.length > 0 && pastWeeks[0].topPodium && pastWeeks[0].topPodium.length > 0 && pastWeeks[0].topPodium.some((p: any) => (p.points || 0) > 0))
-      ? pastWeeks[0].topPodium
-      : [];
+    podiumFromArchivedWeek || 
+    podiumFromSettings || 
+    [];
 
   const top1Week = activePastWeekPodium.find(p => p.position === 1);
   const top2Week = activePastWeekPodium.find(p => p.position === 2);
   const top3Week = activePastWeekPodium.find(p => p.position === 3);
 
-  const formattedClosedDate = lastWeekClosedAt 
-    ? new Date(lastWeekClosedAt).toLocaleDateString('pt-BR') 
-    : (pastWeeks[0]?.closedAt ? new Date(pastWeeks[0].closedAt).toLocaleDateString('pt-BR') : '');
+  const formattedClosedDate = (latestArchivedWeek?.closedAt || latestArchivedWeek?.createdAt)
+    ? new Date(latestArchivedWeek.closedAt || latestArchivedWeek.createdAt).toLocaleDateString('pt-BR')
+    : (lastWeekClosedAt ? new Date(lastWeekClosedAt).toLocaleDateString('pt-BR') : '');
+
+  const weekTitle = latestArchivedWeek?.title || (latestArchivedWeek?.weekNumber ? `Semana ${latestArchivedWeek.weekNumber}` : 'Semana Anterior');
 
   const totalWeeklyXP = ranking.reduce((acc, curr) => acc + Number(curr.weeklyPoints || 0), 0);
   const leader = ranking.length > 0 ? ranking[0] : null;
@@ -316,28 +330,28 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
               </div>
 
               {/* Pódio da Semana Anterior (Comprovação dos Ganhadores) */}
-              {activePastWeekPodium.length > 0 && (
-                <div className="rounded-2xl p-4 sm:p-5 bg-gradient-to-br from-yellow-500/15 via-gold/5 to-transparent border border-gold/40 shadow-xl relative overflow-hidden">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold shadow-sm shrink-0">
-                        <Crown className="w-4 h-4 text-gold" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-bold font-display text-white">
-                            Pódio da Semana Anterior
-                          </h3>
-                          <span className="text-[9px] uppercase tracking-wider font-extrabold bg-gold/20 text-gold px-2 py-0.5 rounded-full border border-gold/30">
-                            Ganhadores Comprovados
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-white/50">
-                          {formattedClosedDate ? `Semana encerrada em ${formattedClosedDate} • Prêmios distribuídos` : 'Vencedores da última semana'}
-                        </p>
-                      </div>
+              <div className="rounded-2xl p-4 sm:p-5 bg-gradient-to-br from-yellow-500/15 via-gold/5 to-transparent border border-gold/40 shadow-xl relative overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-gold/20 border border-gold/40 flex items-center justify-center text-gold shadow-sm shrink-0">
+                      <Crown className="w-4 h-4 text-gold" />
                     </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold font-display text-white">
+                          Pódio da Semana Anterior
+                        </h3>
+                        <span className="text-[9px] uppercase tracking-wider font-extrabold bg-gold/20 text-gold px-2 py-0.5 rounded-full border border-gold/30">
+                          Ganhadores Comprovados
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-white/50">
+                        {formattedClosedDate ? `${weekTitle} encerrada em ${formattedClosedDate} • Prêmios distribuídos` : 'Vencedores do último ciclo semanal'}
+                      </p>
+                    </div>
+                  </div>
 
+                  {activePastWeekPodium.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setShowLastWeekPodium(!showLastWeekPodium)}
@@ -346,78 +360,130 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                       <span>{showLastWeekPodium ? 'Ocultar Pódio' : 'Exibir Pódio'}</span>
                       {showLastWeekPodium ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
+                  )}
+                </div>
+
+                {activePastWeekPodium.length === 0 ? (
+                  <div className="text-center py-6 px-4 rounded-xl bg-black/20 border border-white/5">
+                    <Trophy className="w-7 h-7 text-gold/40 mx-auto mb-2" />
+                    <p className="text-xs text-white/80 font-bold">Nenhum Pódio Semanal Arquivado Ainda</p>
+                    <p className="text-[11px] text-white/40 max-w-sm mx-auto mt-1 leading-relaxed">
+                      Assim que o barbeiro encerrar o ciclo da semana, os ganhadores do Top 3 e seus prêmios serão exibidos aqui como comprovação oficial.
+                    </p>
                   </div>
-
-                  {showLastWeekPodium && (
-                    <div className="pt-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
-                        {/* 2º Lugar - Prata (Esquerda) */}
-                        <div className="order-2 sm:order-1 p-3.5 rounded-2xl bg-gradient-to-b from-gray-300/15 via-gray-300/5 to-black/40 border border-gray-300/30 text-center relative flex flex-col items-center">
-                          <div className="w-12 h-12 rounded-full bg-carbon border-2 border-gray-300 flex items-center justify-center relative mb-2 shadow-md overflow-hidden">
-                            {top2Week?.avatarUrl ? (
-                              <img src={top2Week.avatarUrl} alt={top2Week.username} className="w-full h-full object-cover" />
-                            ) : (
-                              <User className="w-6 h-6 text-gray-300" />
-                            )}
-                            <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-gray-300 text-carbon font-black text-[10px] flex items-center justify-center shadow">
-                              2º
-                            </span>
-                          </div>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-gray-300">2º Lugar</span>
-                          <p className="font-bold text-white text-sm truncate max-w-full mt-0.5">{top2Week?.username || '—'}</p>
-                          <p className="text-xs font-mono font-bold text-gray-300">{(top2Week?.points || 0).toLocaleString('pt-BR')} pts</p>
-                          <div className="mt-2 w-full pt-1.5 border-t border-gray-300/20 text-[10px] font-medium text-gray-200 bg-black/40 rounded-lg py-1 px-2 truncate">
-                            🎁 {top2Week?.reward || '1h VIP + Picolé'}
-                          </div>
-                        </div>
-
-                        {/* 1º Lugar - Ouro (Centro, Mais Alto com Coroa) */}
-                        <div className="order-1 sm:order-2 p-4 rounded-2xl bg-gradient-to-b from-yellow-500/25 via-yellow-500/10 to-black/50 border border-yellow-500/50 text-center relative flex flex-col items-center shadow-lg shadow-yellow-500/10 sm:-translate-y-2">
-                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-yellow-500 text-carbon px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-1 shadow-md">
-                            <Crown className="w-3 h-3 text-carbon fill-carbon" /> Campeão
-                          </div>
-                          <div className="w-14 h-14 rounded-full bg-carbon border-2 border-yellow-400 flex items-center justify-center relative mb-2 shadow-lg overflow-hidden mt-1">
+                ) : (
+                  showLastWeekPodium && (
+                    <div className="pt-1 space-y-3">
+                      {/* Pódio dos Campeões da Semana Anterior (Mesmo design e ordem do Histórico) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {/* 1º Lugar */}
+                        <div className="p-3 rounded-xl bg-gradient-to-b from-yellow-500/20 to-yellow-500/5 border border-yellow-500/30 flex items-center sm:flex-col sm:text-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-yellow-500/20 border-2 border-yellow-500 flex items-center justify-center text-yellow-400 font-bold shrink-0 relative overflow-hidden">
                             {top1Week?.avatarUrl ? (
                               <img src={top1Week.avatarUrl} alt={top1Week.username} className="w-full h-full object-cover" />
                             ) : (
-                              <User className="w-7 h-7 text-yellow-400" />
+                              <Crown className="w-5 h-5 text-yellow-400" />
                             )}
-                            <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-yellow-400 text-carbon font-black text-[10px] flex items-center justify-center shadow">
-                              1º
-                            </span>
+                            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-yellow-500 text-carbon text-[9px] font-black flex items-center justify-center">1</span>
                           </div>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-yellow-400">1º Lugar</span>
-                          <p className="font-black text-yellow-300 text-base truncate max-w-full mt-0.5">{top1Week?.username || '—'}</p>
-                          <p className="text-sm font-mono font-black text-yellow-400">{(top1Week?.points || 0).toLocaleString('pt-BR')} pts</p>
-                          <div className="mt-2 w-full pt-1.5 border-t border-yellow-500/30 text-[11px] font-bold text-yellow-200 bg-black/50 rounded-lg py-1 px-2 truncate">
-                            🎁 {top1Week?.reward || 'Acesso Livre VIP'}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-bold uppercase text-yellow-400 tracking-wider">Campeão</p>
+                            <p className="font-bold text-sm text-white truncate">{top1Week?.username || '—'}</p>
+                            <p className="text-xs font-mono font-bold text-yellow-400">{(top1Week?.points || 0).toLocaleString('pt-BR')} pts</p>
+                            <p className="text-[10px] text-yellow-200/90 truncate mt-0.5 font-medium">🎁 {top1Week?.reward || 'Acesso Livre VIP'}</p>
                           </div>
                         </div>
 
-                        {/* 3º Lugar - Bronze (Direita) */}
-                        <div className="order-3 p-3.5 rounded-2xl bg-gradient-to-b from-amber-700/20 via-amber-700/5 to-black/40 border border-amber-700/30 text-center relative flex flex-col items-center">
-                          <div className="w-12 h-12 rounded-full bg-carbon border-2 border-amber-700 flex items-center justify-center relative mb-2 shadow-md overflow-hidden">
+                        {/* 2º Lugar */}
+                        <div className="p-3 rounded-xl bg-gradient-to-b from-gray-300/15 to-gray-300/5 border border-gray-300/20 flex items-center sm:flex-col sm:text-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-gray-300/20 border-2 border-gray-300 flex items-center justify-center text-gray-300 font-bold shrink-0 relative overflow-hidden">
+                            {top2Week?.avatarUrl ? (
+                              <img src={top2Week.avatarUrl} alt={top2Week.username} className="w-full h-full object-cover" />
+                            ) : (
+                              <Trophy className="w-5 h-5 text-gray-300" />
+                            )}
+                            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-gray-300 text-carbon text-[9px] font-black flex items-center justify-center">2</span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-bold uppercase text-gray-300 tracking-wider">Vice-Campeão</p>
+                            <p className="font-bold text-sm text-white truncate">{top2Week?.username || '—'}</p>
+                            <p className="text-xs font-mono font-bold text-gray-300">{(top2Week?.points || 0).toLocaleString('pt-BR')} pts</p>
+                            <p className="text-[10px] text-gray-200/90 truncate mt-0.5 font-medium">🎁 {top2Week?.reward || '1h VIP + Picolé'}</p>
+                          </div>
+                        </div>
+
+                        {/* 3º Lugar */}
+                        <div className="p-3 rounded-xl bg-gradient-to-b from-amber-700/15 to-amber-700/5 border border-amber-700/20 flex items-center sm:flex-col sm:text-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-amber-700/20 border-2 border-amber-700 flex items-center justify-center text-amber-500 font-bold shrink-0 relative overflow-hidden">
                             {top3Week?.avatarUrl ? (
                               <img src={top3Week.avatarUrl} alt={top3Week.username} className="w-full h-full object-cover" />
                             ) : (
-                              <User className="w-6 h-6 text-amber-500" />
+                              <Trophy className="w-5 h-5 text-amber-500" />
                             )}
-                            <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-700 text-white font-black text-[10px] flex items-center justify-center shadow">
-                              3º
-                            </span>
+                            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-amber-700 text-white text-[9px] font-black flex items-center justify-center">3</span>
                           </div>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-500">3º Lugar</span>
-                          <p className="font-bold text-white text-sm truncate max-w-full mt-0.5">{top3Week?.username || '—'}</p>
-                          <p className="text-xs font-mono font-bold text-amber-500">{(top3Week?.points || 0).toLocaleString('pt-BR')} pts</p>
-                          <div className="mt-2 w-full pt-1.5 border-t border-amber-700/20 text-[10px] font-medium text-amber-200 bg-black/40 rounded-lg py-1 px-2 truncate">
-                            🎁 {top3Week?.reward || 'Picolé Grátis'}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-bold uppercase text-amber-500 tracking-wider">3º Colocado</p>
+                            <p className="font-bold text-sm text-white truncate">{top3Week?.username || '—'}</p>
+                            <p className="text-xs font-mono font-bold text-amber-500">{(top3Week?.points || 0).toLocaleString('pt-BR')} pts</p>
+                            <p className="text-[10px] text-amber-200/90 truncate mt-0.5 font-medium">🎁 {top3Week?.reward || 'Picolé Grátis'}</p>
                           </div>
                         </div>
                       </div>
+
+                      {/* Botão de Expandir Classificação Gravada da Semana Anterior */}
+                      {latestArchivedWeek?.ranking && latestArchivedWeek.ranking.length > 0 && (
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedCurrentWeekRecorded(!expandedCurrentWeekRecorded)}
+                            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-black/30 hover:bg-black/50 text-xs font-bold text-white/70 hover:text-white transition-colors border border-white/5"
+                          >
+                            <span>{expandedCurrentWeekRecorded ? 'Ocultar Classificação Gravada' : 'Ver Classificação Gravada da Semana'}</span>
+                            {expandedCurrentWeekRecorded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+
+                          <AnimatePresence>
+                            {expandedCurrentWeekRecorded && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mt-3 space-y-2 pt-2 border-t border-white/5"
+                              >
+                                {latestArchivedWeek.ranking.map((member, idx) => (
+                                  <div 
+                                    key={idx} 
+                                    className="flex items-center justify-between p-2.5 rounded-xl bg-black/20 border border-white/5 text-xs"
+                                  >
+                                    <div className="flex items-center gap-2.5">
+                                      <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] ${
+                                        member.position === 1 ? 'bg-yellow-500 text-carbon' :
+                                        member.position === 2 ? 'bg-gray-300 text-carbon' :
+                                        member.position === 3 ? 'bg-amber-700 text-white' :
+                                        'bg-white/10 text-white/60'
+                                      }`}>
+                                        {member.position}
+                                      </span>
+                                      <span className="font-bold text-white/90">{member.username}</span>
+                                      {member.tierName && (
+                                        <span className="text-[10px] text-white/40 font-medium">({member.tierName})</span>
+                                      )}
+                                    </div>
+                                    <span className="font-mono font-bold text-gold">
+                                      {member.points.toLocaleString('pt-BR')} pts
+                                    </span>
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  )
+                )}
+              </div>
 
               {/* Título do Ranking */}
               <div className="space-y-1 px-1 pt-1">

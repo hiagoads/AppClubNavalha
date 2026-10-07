@@ -156,41 +156,6 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
         if (sData.lastWeekClosedAt) {
           closedAt = sData.lastWeekClosedAt;
         }
-
-        // Se o fechamento estiver registrado antes do encerramento de domingo (04/10/2026):
-        const closedMs = closedAt ? parseDateToMs(closedAt) : 0;
-        const oct4EndMs = new Date('2026-10-04T23:59:59.999Z').getTime();
-        if (closedMs < oct4EndMs) {
-          closedAt = '2026-10-04T23:59:59.999Z';
-          const pastPodium = [
-            { position: 1, username: 'samuelsilva', points: 8206, reward: 'Acesso Livre VIP (1º da Semana)', tierName: 'Diamante' },
-            { position: 2, username: 'DALTIILINDO', points: 7500, reward: '1h VIP + Picolé Grátis', tierName: 'Diamante' },
-            { position: 3, username: 'pedropersonal', points: 7500, reward: 'Picolé Grátis', tierName: 'Diamante' }
-          ];
-          try {
-            await updateDoc(doc(db, 'settings', 'gamification'), {
-              lastWeekClosedAt: '2026-10-04T23:59:59.999Z',
-              lastWeekPodium: pastPodium,
-              currentWeekNumber: Math.max(2, (sData.currentWeekNumber || 1))
-            });
-
-            const pwSnap = await getDocs(collection(db, 'past_weeks'));
-            if (pwSnap.empty) {
-              await addDoc(collection(db, 'past_weeks'), {
-                weekNumber: 1,
-                title: 'Semana 1',
-                endDate: '2026-10-04',
-                closedAt: '2026-10-04T23:59:59.999Z',
-                totalParticipants: 35,
-                totalWeeklyPoints: 124506,
-                topPodium: pastPodium,
-                createdAt: '2026-10-04T23:59:59.999Z'
-              });
-            }
-          } catch {
-            // ignora erro se não for admin
-          }
-        }
         if (Array.isArray(sData.rankBonuses)) {
           bonusesToUse = sData.rankBonuses;
         }
@@ -311,26 +276,56 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
 
         // 1. Processa point_transactions da semana atual
         for (const tx of clientTxs) {
+          // Auto-reparação das transações de auditoria da semana que foram registradas com 0 pontos:
+          if ((tx.id === 'X1rSGfR3wzkhYGcN53KP' || tx.id === 'AyFzL10IRlSiHv7lxrkU') && Number(tx.points || 0) === 0) {
+            tx.points = 500;
+            tx.weeklyPointsChange = 500;
+            tx.scope = 'weekly_only';
+            tx.type = 'correction';
+            tx.description = 'Correção de auditoria: +500 pts no Ranking Semanal';
+            tx.weeklyBalanceAfter = tx.id === 'X1rSGfR3wzkhYGcN53KP' ? 3400 : 3900;
+            try {
+              updateDoc(doc(db, 'point_transactions', tx.id), {
+                points: 500,
+                weeklyPointsChange: 500,
+                scope: 'weekly_only',
+                type: 'correction',
+                description: 'Correção de auditoria: +500 pts no Ranking Semanal',
+                weeklyBalanceAfter: tx.id === 'X1rSGfR3wzkhYGcN53KP' ? 3400 : 3900
+              }).catch(() => {});
+            } catch {}
+          }
+
           const txTime = parseDateToMs(tx.createdAt) || parseDateToMs(tx.date);
           if (txTime >= weekStartMs) {
             hasActivityThisWeek = true;
             const pts = Number(tx.points || 0);
-            
-            // Adições e ganhos
-            if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
-              // Se foi marcado explicitamente como APENAS saldo atual ('balance_only'), não altera ranking semanal
-              if (tx.scope === 'balance_only') {
-                // não conta no semanal
-              } else {
-                calculatedWeeklyPoints += Math.max(0, pts);
+
+            // Se a transação gravou weeklyPointsChange explícito, respeita a alteração da semana
+            if (typeof tx.weeklyPointsChange === 'number') {
+              calculatedWeeklyPoints += tx.weeklyPointsChange;
+            }
+            // Se foi marcado explicitamente como ajuste exclusivo do ranking semanal
+            else if (tx.scope === 'weekly_only') {
+              calculatedWeeklyPoints += pts;
+            }
+            // Se foi apenas saldo gastável ('balance_only') ou apenas temporada ('seasonal_only'), NÃO altera o ranking da semana
+            else if (tx.scope === 'balance_only' || tx.scope === 'seasonal_only') {
+              // não conta no semanal
+            }
+            // Correções ou ajustes diretos
+            else if (tx.scope === 'custom_direct' || tx.type === 'correction') {
+              if (pts !== 0) {
+                calculatedWeeklyPoints += pts;
               }
+            }
+            // Adições e ganhos gerais
+            else if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
+              calculatedWeeklyPoints += Math.max(0, pts);
             } 
-            // Deduções e estornos
+            // Deduções e estornos gerais
             else if (tx.type === 'manual_remove' || tx.type === 'adjusted' || tx.type === 'reverted' || pts < 0) {
-              // Se foi remoção APENAS do saldo gastável ('balance_only') ou resgate de prêmio ('redeem'), NÃO deduz do ranking da semana!
-              if (tx.scope === 'balance_only' || tx.type === 'redeem') {
-                // não deduz do semanal!
-              } else {
+              if (tx.type !== 'redeem') {
                 calculatedWeeklyPoints += pts; // pts é negativo, reduz pontuação semanal
               }
             }
@@ -624,10 +619,18 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
       const txTime = parseDateToMs(tx.createdAt) || parseDateToMs(tx.date);
       if (txTime >= targetStartMs) {
         const pts = Number(tx.points || 0);
-        if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
-          if (tx.scope !== 'balance_only') calculatedWeekly += Math.max(0, pts);
+        if (typeof tx.weeklyPointsChange === 'number') {
+          calculatedWeekly += tx.weeklyPointsChange;
+        } else if (tx.scope === 'weekly_only') {
+          calculatedWeekly += pts;
+        } else if (tx.scope === 'balance_only' || tx.scope === 'seasonal_only') {
+          // não conta no semanal
+        } else if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
+          calculatedWeekly += Math.max(0, pts);
         } else if (tx.type === 'manual_remove' || tx.type === 'adjusted' || tx.type === 'reverted' || pts < 0) {
-          if (tx.scope !== 'balance_only' && tx.type !== 'redeem') calculatedWeekly += pts;
+          if (tx.type !== 'redeem') calculatedWeekly += pts;
+        } else if (tx.type === 'correction' && typeof tx.weeklyPointsChange === 'number') {
+          calculatedWeekly += tx.weeklyPointsChange;
         }
       }
     }

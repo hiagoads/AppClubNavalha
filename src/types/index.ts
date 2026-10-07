@@ -224,10 +224,15 @@ export interface PointTransaction {
   clientName?: string;
   clientAvatar?: string;
   points: number;
-  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction' | 'reverted';
-  scope?: 'balance_only' | 'all_balances' | 'custom_adjustment';
+  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction' | 'reverted' | 'tier_override';
+  scope?: 'balance_only' | 'all_balances' | 'custom_adjustment' | 'custom_direct' | 'weekly_only' | 'seasonal_only';
   description: string;
   balanceAfter?: number;
+  weeklyBalanceAfter?: number;
+  seasonalBalanceAfter?: number;
+  weeklyPointsChange?: number;
+  seasonalPointsChange?: number;
+  balancePointsChange?: number;
   bookingId?: string;
   createdAt: string;
 }
