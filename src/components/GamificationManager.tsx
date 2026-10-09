@@ -87,6 +87,12 @@ export function GamificationManager() {
     return [...list].sort(compareClientsForRanking);
   }, [clients]);
 
+  // Prêmios da patente atualmente selecionada para edição
+  const currentTierBonuses = React.useMemo(() => {
+    if (editingTierForBonus === null) return [];
+    return rankBonuses.filter(b => b.level === editingTierForBonus);
+  }, [rankBonuses, editingTierForBonus]);
+
   // Rewards State
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
   const [isSavingRewards, setIsSavingRewards] = useState(false);
@@ -212,60 +218,59 @@ export function GamificationManager() {
         rankBonuses: updated
       }, { merge: true });
 
-      if (syncClients) {
-        let syncedCount = 0;
-        try {
-          const snap = await getDocs(collection(db, 'clients'));
-          for (const d of snap.docs) {
-            const clientData = d.data();
-            const peak = Math.max(
-              0,
-              clientData.seasonHighestPoints ?? 0,
-              clientData.highestSeasonalPoints ?? 0,
-              clientData.seasonalPoints ?? 0,
-              clientData.points ?? 0
-            );
-            const calculatedTier = getLevelTier(peak, tierThresholds, 1);
-            const clientLvl = Math.max(
-              clientData.seasonHighestTierLevel ?? 1,
-              clientData.highestTierLevel ?? 1,
-              clientData.manualTierLevel ?? 1,
-              calculatedTier.tierLevel
-            );
+      if (newTierBonuses.length === 0) {
+        toast.success(`✨ Patente ${getTierName(tierLevel)} agora está sem bônus!`);
+      } else {
+        toast.success(`🎉 Prêmios da patente ${getTierName(tierLevel)} salvos com sucesso!`);
+      }
 
-            if (clientLvl >= tierLevel) {
-              const res = await checkAndSyncClientRankBonuses(
-                d.id,
-                clientData,
-                tierThresholds,
-                updated
+      if (syncClients && newTierBonuses.length > 0) {
+        // Executa sincronização com clientes em segundo plano para não travar a interface
+        (async () => {
+          try {
+            const snap = await getDocs(collection(db, 'clients'));
+            let syncedCount = 0;
+            for (const d of snap.docs) {
+              const clientData = d.data();
+              const peak = Math.max(
+                0,
+                clientData.seasonHighestPoints ?? 0,
+                clientData.highestSeasonalPoints ?? 0,
+                clientData.seasonalPoints ?? 0,
+                clientData.points ?? 0
               );
-              if (res && res.awardedBonuses && res.awardedBonuses.length > 0) {
-                syncedCount++;
+              const calculatedTier = getLevelTier(peak, tierThresholds, 1);
+              const clientLvl = Math.max(
+                clientData.seasonHighestTierLevel ?? 1,
+                clientData.highestTierLevel ?? 1,
+                clientData.manualTierLevel ?? 1,
+                calculatedTier.tierLevel
+              );
+
+              if (clientLvl >= tierLevel) {
+                const res = await checkAndSyncClientRankBonuses(
+                  d.id,
+                  clientData,
+                  tierThresholds,
+                  updated
+                );
+                if (res && res.awardedBonuses && res.awardedBonuses.length > 0) {
+                  syncedCount++;
+                }
               }
             }
+            if (syncedCount > 0) {
+              toast.success(`🎁 Prêmios de ${getTierName(tierLevel)} creditados para ${syncedCount} cliente(s) elegíveis!`, { id: `sync-bonuses-${tierLevel}` });
+            }
+          } catch (syncErr) {
+            console.warn('Erro ao sincronizar clientes para novos prêmios:', syncErr);
           }
-        } catch (syncErr) {
-          console.warn('Erro ao sincronizar clientes para novos prêmios:', syncErr);
-        }
-
-        if (newTierBonuses.length === 0) {
-          toast.success(`✨ Patente ${getTierName(tierLevel)} agora está sem bônus!`);
-        } else if (syncedCount > 0) {
-          toast.success(`🎉 Prêmios de ${getTierName(tierLevel)} salvos e distribuídos para ${syncedCount} cliente(s)!`);
-        } else {
-          toast.success(`🎉 Prêmios da patente ${getTierName(tierLevel)} gravados com sucesso no banco de dados!`);
-        }
-      } else {
-        if (newTierBonuses.length === 0) {
-          toast.success(`✨ Patente ${getTierName(tierLevel)} agora está sem bônus!`);
-        } else {
-          toast.success(`🎉 Prêmios da patente ${getTierName(tierLevel)} gravados com sucesso no banco de dados!`);
-        }
+        })();
       }
     } catch (err: any) {
       if (err.code !== 'permission-denied') console.error('Erro ao salvar prêmios da patente:', err);
       toast.error('Erro ao salvar prêmios no banco de dados.');
+      throw err;
     }
   };
 
@@ -291,9 +296,6 @@ export function GamificationManager() {
   };
 
   const handleQuickSetNoBonus = async (tierLevel: number, tierName: string) => {
-    if (!window.confirm(`Tem certeza que deseja definir a patente ${tierName} como sem bônus?`)) {
-      return;
-    }
     const updated = rankBonuses.filter(b => b.level !== tierLevel);
     setRankBonuses(updated);
     setActiveRankBonuses(updated);
@@ -2908,7 +2910,7 @@ export function GamificationManager() {
       onClose={() => setEditingTierForBonus(null)}
       tierLevel={editingTierForBonus}
       tierName={getTierName(editingTierForBonus)}
-      currentBonuses={rankBonuses.filter(b => b.level === editingTierForBonus)}
+      currentBonuses={currentTierBonuses}
       clientCount={clients.filter(c => {
         const peak = Math.max(
           0,

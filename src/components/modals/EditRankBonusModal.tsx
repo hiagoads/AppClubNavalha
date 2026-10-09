@@ -28,52 +28,63 @@ export function EditRankBonusModal({
   const [isSaving, setIsSaving] = useState(false);
   const [syncWithClients, setSyncWithClients] = useState(true);
 
+  // Track which tier was initialized so we don't wipe active user edits when parent re-renders
+  const initializedTierRef = React.useRef<number | null>(null);
+
   useEffect(() => {
     if (isOpen) {
-      setBonuses(
-        currentBonuses && currentBonuses.length > 0
-          ? JSON.parse(JSON.stringify(currentBonuses))
-          : []
-      );
-      setIsSaving(false);
+      if (initializedTierRef.current !== tierLevel) {
+        setBonuses(
+          currentBonuses && currentBonuses.length > 0
+            ? JSON.parse(JSON.stringify(currentBonuses))
+            : []
+        );
+        initializedTierRef.current = tierLevel;
+        setIsSaving(false);
+      }
+    } else {
+      initializedTierRef.current = null;
     }
-  }, [isOpen, currentBonuses, tierLevel]);
+  }, [isOpen, tierLevel]);
 
   if (!isOpen) return null;
 
   const theme = getTierTheme(tierLevel);
 
   const getDefaultTitleForType = (type: RankBonusDefinition['type'], hours = 1, pts = 5000) => {
+    const safeName = tierName || 'Patente';
     switch (type) {
       case 'vip_hours':
-        return `Bônus Patente ${tierName} (${hours}h VIP)`;
+        return `Bônus Patente ${safeName} (${hours}h VIP)`;
       case 'points':
-        return `Bônus Patente ${tierName} (+${pts.toLocaleString('pt-BR')} pts)`;
+        return `Bônus Patente ${safeName} (+${pts.toLocaleString('pt-BR')} pts)`;
       case 'popsicle':
-        return `Bônus Patente ${tierName} (1 Picolé Grátis)`;
+        return `Bônus Patente ${safeName} (1 Picolé Grátis)`;
       case 'discount_50':
-        return `Bônus Patente ${tierName} (50% OFF)`;
+        return `Bônus Patente ${safeName} (50% OFF)`;
       case 'unlimited_vip':
-        return `Bônus Patente ${tierName} (Acesso VIP Ilimitado)`;
+        return `Bônus Patente ${safeName} (Acesso VIP Ilimitado)`;
       case 'custom':
-        return `Bônus Patente ${tierName} (Prêmio Especial)`;
+        return `Bônus Patente ${safeName} (Prêmio Especial)`;
       default:
-        return `Bônus Patente ${tierName}`;
+        return `Bônus Patente ${safeName}`;
     }
   };
 
   const handleAddBonus = (type: RankBonusDefinition['type'] = 'vip_hours') => {
     const timestamp = Date.now();
+    const safeTierName = tierName || 'Patente';
     const newBonus: RankBonusDefinition = {
       level: tierLevel,
-      tierName,
-      rankKey: `rank_${tierName.toLowerCase()}_${type}_${timestamp}`,
+      tierName: safeTierName,
+      rankKey: `rank_${safeTierName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${type}_${timestamp}`,
       title: getDefaultTitleForType(type, type === 'vip_hours' ? 1 : undefined, type === 'points' ? 5000 : undefined),
       type,
       ...(type === 'vip_hours' ? { totalHours: 1 } : {}),
       ...(type === 'points' ? { bonusPoints: 5000 } : {}),
     };
     setBonuses(prev => [...prev, newBonus]);
+    toast.success(`Prêmio "${newBonus.title}" adicionado! Personalize e salve.`);
   };
 
   const handleRemoveBonus = (index: number) => {
@@ -216,6 +227,7 @@ export function EditRankBonusModal({
               </div>
             </div>
             <button
+              type="button"
               onClick={onClose}
               disabled={isSaving}
               className="text-white/40 hover:text-white p-2 rounded-full hover:bg-white/5 transition-colors"
@@ -334,17 +346,9 @@ export function EditRankBonusModal({
                     type="button"
                     onClick={() => handleAddBonus('vip_hours')}
                     disabled={isSaving}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gold/15 hover:bg-gold/25 text-gold border border-gold/30 font-bold text-xs transition-all shadow-sm"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gold/15 hover:bg-gold/25 text-gold border border-gold/30 font-bold text-xs transition-all shadow-sm"
                   >
-                    <Plus className="w-4 h-4" /> Adicionar Prêmio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDirectSaveNoBonus}
-                    disabled={isSaving}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 font-bold text-xs transition-all shadow-sm"
-                  >
-                    <Check className="w-4 h-4 text-red-300" /> Confirmar Patente Sem Bônus Agora
+                    <Plus className="w-4 h-4" /> + Adicionar Prêmio
                   </button>
                 </div>
               </div>
@@ -352,7 +356,7 @@ export function EditRankBonusModal({
               <div className="space-y-4">
                 {bonuses.map((bonus, idx) => (
                   <div
-                    key={idx}
+                    key={bonus.rankKey || idx}
                     className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3 relative group transition-all hover:border-gold/30"
                   >
                     <div className="flex items-center justify-between">
@@ -405,6 +409,7 @@ export function EditRankBonusModal({
                               max="24"
                               value={bonus.totalHours || 1}
                               onChange={(e) => handleHoursChange(idx, parseInt(e.target.value) || 1)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                               disabled={isSaving}
                               className="w-full bg-black/60 border border-white/10 rounded-xl py-2 px-3 text-white focus:outline-none focus:border-gold/50 text-xs font-bold font-mono"
                             />
@@ -425,6 +430,7 @@ export function EditRankBonusModal({
                               min="100"
                               value={bonus.bonusPoints || 5000}
                               onChange={(e) => handlePointsChange(idx, parseInt(e.target.value) || 0)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                               disabled={isSaving}
                               className="w-full bg-black/60 border border-white/10 rounded-xl py-2 px-3 text-white focus:outline-none focus:border-gold/50 text-xs font-bold font-mono"
                             />
@@ -490,6 +496,7 @@ export function EditRankBonusModal({
                         type="text"
                         value={bonus.title}
                         onChange={(e) => handleTitleChange(idx, e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                         placeholder={`Bônus Patente ${tierName}`}
                         disabled={isSaving}
                         className="w-full bg-black/60 border border-white/10 rounded-xl py-2 px-3 text-white focus:outline-none focus:border-gold/50 text-xs font-bold"
