@@ -20,6 +20,10 @@ export async function revertCompletedBookingGamification(
   newLevel?: number;
 }> {
   if (!booking) return { reverted: false };
+  // Atendimentos de clientes sem cadastro não pontuaram e não devem estornar pontos
+  if (booking.pointsAwarded === 0 && !booking.awardedClientId) {
+    return { reverted: false };
+  }
 
   try {
     let clientId = booking.awardedClientId || booking.clientId || null;
@@ -57,8 +61,8 @@ export async function revertCompletedBookingGamification(
     // 3. Determinar a quantidade de pontos que foi creditada por este atendimento
     let pointsToDeduct = 0;
 
-    if (typeof booking.pointsAwarded === 'number' && booking.pointsAwarded > 0) {
-      pointsToDeduct = booking.pointsAwarded;
+    if (typeof booking.pointsAwarded === 'number') {
+      pointsToDeduct = Math.max(0, booking.pointsAwarded);
     } else {
       // Tentar localizar na coleção point_transactions vinculada ao bookingId
       try {
@@ -80,8 +84,8 @@ export async function revertCompletedBookingGamification(
         console.warn('Erro ao consultar point_transactions para estorno:', txErr);
       }
 
-      // Fallback: se não encontrou em pointsAwarded nem em point_transactions, calcular pelo preço do serviço
-      if (pointsToDeduct === 0 && (booking.price || booking.expectedPrice)) {
+      // Fallback: se não encontrou em pointsAwarded nem em point_transactions, calcular pelo preço do serviço apenas se foi registrado para um cliente
+      if (pointsToDeduct === 0 && (booking.awardedClientId || booking.clientId) && (booking.price || booking.expectedPrice)) {
         const p = Number(booking.price ?? booking.expectedPrice ?? 0);
         if (p > 0) {
           pointsToDeduct = Math.floor(p * 100);

@@ -113,18 +113,12 @@ export default function BillingView() {
     if (b.awardedClientId && clientById[b.awardedClientId]) return clientById[b.awardedClientId];
     if (b.clientWhatsapp) {
       const clean = String(b.clientWhatsapp).replace(/\D/g, '');
-      if (clean && clean.length >= 8) {
-        if (clientByCleanPhone[clean]) return clientByCleanPhone[clean];
-        const found = Object.keys(clientByCleanPhone).find(p => p.length >= 8 && (p.endsWith(clean) || clean.endsWith(p)));
-        if (found) return clientByCleanPhone[found];
+      if (clean && clean.length >= 10 && clean.length <= 13 && clientByCleanPhone[clean]) {
+        return clientByCleanPhone[clean];
       }
     }
-    if (b.clientName) {
-      const nameLower = String(b.clientName).trim().toLowerCase();
-      if (clientByName[nameLower]) return clientByName[nameLower];
-    }
     return null;
-  }, [clientById, clientByCleanPhone, clientByName]);
+  }, [clientById, clientByCleanPhone]);
 
   const getBookingPrice = (b: Booking) => {
      if (b.price !== undefined && b.price !== null && parsePrice(b.price) > 0) return parsePrice(b.price);

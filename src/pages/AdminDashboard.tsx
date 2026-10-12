@@ -389,7 +389,7 @@ export default function AdminDashboard() {
 
       if (pointsToGive > 0 && activeInfo) {
         try {
-          // 1. Prioritize lookup by linked clientId directly
+          // 1. Prioridade absoluta: buscar pelo cadastro explícito do cliente no Clube Navalha (clientId)
           if (activeInfo.clientId) {
             const clientSnap = await getDoc(doc(db, 'clients', activeInfo.clientId));
             if (clientSnap.exists()) {
@@ -398,49 +398,19 @@ export default function AdminDashboard() {
             }
           }
 
-          // 2. Fallback to phone number or name query if not matched by clientId
+          // 2. Fallback estrito: buscar unicamente por telefone WhatsApp idêntico e completo (mínimo de 10 dígitos)
+          // REGRA CRÍTICA: NUNCA buscar por substring ou aproximação, e JAMAIS buscar por nome de cliente.
+          // Clientes sem cadastro no Clube Navalha NÃO DEVEM gerar pontos!
           if (!clientDoc && activeInfo.clientWhatsapp) {
             const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
-            if (cleanPhone) {
+            if (cleanPhone && cleanPhone.length >= 10 && cleanPhone.length <= 13) {
               const clientsRef = collection(db, 'clients');
               const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
               const snapshot = await getDocs(q);
               if (!snapshot.empty) {
                 clientDoc = snapshot.docs[0];
                 clientData = clientDoc.data();
-              } else {
-                // Tenta carregar todos os clientes e fazer matching flexível (por dígitos de telefone ou nome)
-                const allSnap = await getDocs(clientsRef);
-                const found = allSnap.docs.find(d => {
-                  const data = d.data();
-                  const cPhone = (data.whatsapp || '').replace(/\D/g, '');
-                  if (cPhone && (cPhone === cleanPhone || cPhone.endsWith(cleanPhone) || cleanPhone.endsWith(cPhone))) {
-                    return true;
-                  }
-                  if (activeInfo.clientName && data.username) {
-                    return data.username.trim().toLowerCase() === activeInfo.clientName.trim().toLowerCase();
-                  }
-                  return false;
-                });
-                if (found) {
-                  clientDoc = found;
-                  clientData = found.data();
-                }
               }
-            }
-          }
-
-          // 3. Fallback adicional por nome se não tiver whatsapp
-          if (!clientDoc && activeInfo.clientName) {
-            const clientsRef = collection(db, 'clients');
-            const allSnap = await getDocs(clientsRef);
-            const found = allSnap.docs.find(d => {
-              const data = d.data();
-              return data.username && data.username.trim().toLowerCase() === activeInfo.clientName.trim().toLowerCase();
-            });
-            if (found) {
-              clientDoc = found;
-              clientData = found.data();
             }
           }
         } catch (e) {
@@ -535,6 +505,8 @@ export default function AdminDashboard() {
         } catch (e) {
           console.error("Error giving points:", e);
         }
+      } else if (pointsToGive > 0 && (!clientDoc || !clientData)) {
+        toast('Atendimento finalizado. (Cliente sem cadastro no Clube Navalha - não pontua)', { icon: 'ℹ️' });
       } else if (finalPrice > 0 && activeInfo && (activeInfo.clientId || activeInfo.clientWhatsapp) && servicesOnlyPrice === 0) {
         toast('Atendimento finalizado. (Produtos físicos não acumulam pontos no Clube)', { icon: 'ℹ️' });
       }

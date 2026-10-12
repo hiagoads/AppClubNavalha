@@ -224,26 +224,15 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
         const pts = Number(b.pointsAwarded || 0);
 
         if (pts > 0) {
-          // Identifica o cliente associado ao booking
+          // Identifica o cliente associado ao booking de forma estrita
           let targetClientId = b.awardedClientId || b.clientId;
 
+          // Se não houver clientId vinculado, permite busca apenas por telefone WhatsApp idêntico e completo (mínimo 10 dígitos)
+          // NUNCA fazer busca por aproximação ou por nome (evita atribuir atendimentos de clientes sem cadastro a clientes aleatórios)
           if (!targetClientId && b.clientWhatsapp) {
             const cleanPhone = String(b.clientWhatsapp).replace(/\D/g, '');
-            if (cleanPhone && clientByCleanPhone[cleanPhone]) {
+            if (cleanPhone && cleanPhone.length >= 10 && cleanPhone.length <= 13 && clientByCleanPhone[cleanPhone]) {
               targetClientId = clientByCleanPhone[cleanPhone].id;
-            } else if (cleanPhone) {
-              // Tenta substring
-              const found = Object.keys(clientByCleanPhone).find(p => p.endsWith(cleanPhone) || cleanPhone.endsWith(p));
-              if (found) {
-                targetClientId = clientByCleanPhone[found].id;
-              }
-            }
-          }
-
-          if (!targetClientId && b.clientName) {
-            const cleanName = String(b.clientName).trim().toLowerCase();
-            if (clientByName[cleanName]) {
-              targetClientId = clientByName[cleanName].id;
             }
           }
 
@@ -583,15 +572,9 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
         let targetId = b.awardedClientId || b.clientId;
         if (!targetId && b.clientWhatsapp) {
           const clean = String(b.clientWhatsapp).replace(/\D/g, '');
-          if (clean && clientByCleanPhone[clean]) targetId = clientByCleanPhone[clean].id;
-          else if (clean) {
-            const found = Object.keys(clientByCleanPhone).find(p => p.endsWith(clean) || clean.endsWith(p));
-            if (found) targetId = clientByCleanPhone[found].id;
+          if (clean && clean.length >= 10 && clean.length <= 13 && clientByCleanPhone[clean]) {
+            targetId = clientByCleanPhone[clean].id;
           }
-        }
-        if (!targetId && b.clientName) {
-          const cleanName = String(b.clientName).trim().toLowerCase();
-          if (clientByName[cleanName]) targetId = clientByName[cleanName].id;
         }
 
         if (targetId) {

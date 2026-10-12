@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { X, Gift, Plus, Trash2, Sparkles, Trophy, RotateCcw, Check, Loader2, Users, AlertCircle } from 'lucide-react';
 import { RankBonusDefinition, DEFAULT_RANK_BONUSES } from '../../utils/bonusSystem';
 import { getTierTheme } from '../../utils/tierSystem';
@@ -24,28 +23,32 @@ export function EditRankBonusModal({
   clientCount = 0,
   onSave,
 }: EditRankBonusModalProps) {
-  const [bonuses, setBonuses] = useState<RankBonusDefinition[]>([]);
+  const [bonuses, setBonuses] = useState<RankBonusDefinition[]>(() => {
+    return currentBonuses && currentBonuses.length > 0
+      ? JSON.parse(JSON.stringify(currentBonuses))
+      : [];
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [syncWithClients, setSyncWithClients] = useState(true);
 
-  // Track which tier was initialized so we don't wipe active user edits when parent re-renders
-  const initializedTierRef = React.useRef<number | null>(null);
+  // Track the tier level currently loaded
+  const currentTierRef = React.useRef<number | null>(tierLevel);
 
   useEffect(() => {
     if (isOpen) {
-      if (initializedTierRef.current !== tierLevel) {
+      if (currentTierRef.current !== tierLevel) {
         setBonuses(
           currentBonuses && currentBonuses.length > 0
             ? JSON.parse(JSON.stringify(currentBonuses))
             : []
         );
-        initializedTierRef.current = tierLevel;
+        currentTierRef.current = tierLevel;
         setIsSaving(false);
       }
     } else {
-      initializedTierRef.current = null;
+      currentTierRef.current = null;
     }
-  }, [isOpen, tierLevel]);
+  }, [isOpen, tierLevel, currentBonuses]);
 
   if (!isOpen) return null;
 
@@ -74,10 +77,11 @@ export function EditRankBonusModal({
   const handleAddBonus = (type: RankBonusDefinition['type'] = 'vip_hours') => {
     const timestamp = Date.now();
     const safeTierName = tierName || 'Patente';
+    const rand = Math.random().toString(36).substring(2, 7);
     const newBonus: RankBonusDefinition = {
       level: tierLevel,
       tierName: safeTierName,
-      rankKey: `rank_${safeTierName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${type}_${timestamp}`,
+      rankKey: `rank_${safeTierName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${type}_${timestamp}_${rand}`,
       title: getDefaultTitleForType(type, type === 'vip_hours' ? 1 : undefined, type === 'points' ? 5000 : undefined),
       type,
       ...(type === 'vip_hours' ? { totalHours: 1 } : {}),
@@ -198,14 +202,8 @@ export function EditRankBonusModal({
   };
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="bg-carbon border border-gold/40 rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl my-8 relative flex flex-col max-h-[90vh]"
-        >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-carbon border border-gold/40 rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl my-8 relative flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
           {/* Header */}
           <div className="p-6 border-b border-white/10 flex items-center justify-between bg-black/40">
             <div className="flex items-center gap-3">
@@ -572,8 +570,7 @@ export function EditRankBonusModal({
               </button>
             </div>
           </form>
-        </motion.div>
+        </div>
       </div>
-    </AnimatePresence>
   );
 }
