@@ -254,7 +254,7 @@ export interface VipPausedSession {
   bookingId?: string;
   barberId?: string;
   pausedAt: string; // ISO string
-  status: 'paused' | 'resumed' | 'credited' | 'discarded';
+  status: 'paused' | 'resumed' | 'credited' | 'discarded' | 'saved_for_later';
   resumedAt?: string;
   resumedStationId?: string;
   resumedStationName?: string;

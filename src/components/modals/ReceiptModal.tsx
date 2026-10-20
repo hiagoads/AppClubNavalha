@@ -7,7 +7,9 @@ interface ReceiptData {
   services: string;
   date: string;
   time: string;
-  expectedPrice: number;
+  expectedPrice?: number;
+  total?: number;
+  fee?: number;
 }
 
 interface ReceiptModalProps {

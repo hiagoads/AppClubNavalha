@@ -225,16 +225,8 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
 
         if (pts > 0) {
           // Identifica o cliente associado ao booking de forma estrita
-          let targetClientId = b.awardedClientId || b.clientId;
-
-          // Se não houver clientId vinculado, permite busca apenas por telefone WhatsApp idêntico e completo (mínimo 10 dígitos)
-          // NUNCA fazer busca por aproximação ou por nome (evita atribuir atendimentos de clientes sem cadastro a clientes aleatórios)
-          if (!targetClientId && b.clientWhatsapp) {
-            const cleanPhone = String(b.clientWhatsapp).replace(/\D/g, '');
-            if (cleanPhone && cleanPhone.length >= 10 && cleanPhone.length <= 13 && clientByCleanPhone[cleanPhone]) {
-              targetClientId = clientByCleanPhone[cleanPhone].id;
-            }
-          }
+          // Clientes sem cadastro no Clube Navalha NÃO geram pontos! Apenas bookings com clientId/awardedClientId pontuam.
+          const targetClientId = b.awardedClientId || b.clientId || null;
 
           if (targetClientId) {
             if (!completedBookingsByClient[targetClientId]) {
@@ -569,13 +561,8 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
       const b = d.data();
       const pts = Number(b.pointsAwarded || 0);
       if (pts > 0) {
-        let targetId = b.awardedClientId || b.clientId;
-        if (!targetId && b.clientWhatsapp) {
-          const clean = String(b.clientWhatsapp).replace(/\D/g, '');
-          if (clean && clean.length >= 10 && clean.length <= 13 && clientByCleanPhone[clean]) {
-            targetId = clientByCleanPhone[clean].id;
-          }
-        }
+        // Clientes sem cadastro no Clube Navalha NÃO geram pontos! Apenas bookings com clientId/awardedClientId pontuam.
+        const targetId = b.awardedClientId || b.clientId || null;
 
         if (targetId) {
           if (!completedBookingsByClient[targetId]) completedBookingsByClient[targetId] = [];

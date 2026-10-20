@@ -171,38 +171,43 @@ export default function ClientAuth() {
   };
 
   return (
-    <div className="min-h-screen bg-carbon flex items-center justify-center p-4 relative">
+    <div className="min-h-screen min-h-[100dvh] bg-carbon flex flex-col justify-start sm:justify-center items-center p-4 overflow-y-auto w-full relative">
       <button 
         onClick={() => navigate('/')}
-        className="absolute top-6 right-6 p-2 text-white/50 hover:text-white hover:bg-white/10 z-50 transition-colors rounded-full"
+        className="fixed sm:absolute top-4 right-4 sm:top-6 sm:right-6 p-2 text-white/50 hover:text-white hover:bg-white/10 z-50 transition-colors rounded-full"
+        title="Voltar ao início"
+        type="button"
       >
-        <X className="w-8 h-8" />
+        <X className="w-7 h-7 sm:w-8 sm:h-8" />
       </button>
 
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="glass-card w-full max-w-md p-6 sm:p-10 bg-carbon-light overflow-hidden"
-      >
-        <div className="text-center mb-8 flex flex-col items-center">
-          <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-32 h-32 object-contain drop-shadow-2xl mb-2" />
-          <p className="text-gold font-sans text-[10px] sm:text-xs font-bold uppercase tracking-[0.2em] mb-4 mt-2">
-            • Sistema de Fidelidade •
-          </p>
-          <p className="text-white/40 text-xs sm:text-sm mt-4 border-t border-white/10 pt-4 w-full">
-            {isLogin ? 'Entre para ver seus pontos e resgatar prêmios.' : 'Cadastre-se e ganhe pontos a cada corte.'}
-          </p>
-        </div>
+      <div className="w-full max-w-md my-auto py-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass-card w-full p-6 sm:p-10 bg-carbon-light"
+        >
+          <div className="text-center mb-8 flex flex-col items-center">
+            <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-28 h-28 sm:w-32 sm:h-32 object-contain drop-shadow-2xl mb-2" />
+            <p className="text-gold font-sans text-[10px] sm:text-xs font-bold uppercase tracking-[0.2em] mb-4 mt-2">
+              • Sistema de Fidelidade •
+            </p>
+            <p className="text-white/40 text-xs sm:text-sm mt-4 border-t border-white/10 pt-4 w-full">
+              {isLogin ? 'Entre para ver seus pontos e resgatar prêmios.' : 'Cadastre-se e ganhe pontos a cada corte.'}
+            </p>
+          </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <AnimatePresence mode="wait">
-            {!isLogin && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="space-y-4 overflow-hidden"
-              >
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <AnimatePresence>
+              {!isLogin && (
+                <motion.div
+                  key="signup-fields"
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4"
+                >
                 
                 {/* Photo Upload */}
                 <div className="flex justify-center mb-6">
@@ -283,6 +288,8 @@ export default function ClientAuth() {
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                     <input 
+                      id="signup-username"
+                      name="username"
                       required={!isLogin}
                       type="text" 
                       value={username}
@@ -297,6 +304,7 @@ export default function ClientAuth() {
                       minLength={5}
                       autoCapitalize="none"
                       autoCorrect="off"
+                      autoComplete="username"
                       spellCheck="false"
                       className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm font-mono lowercase"
                     />
@@ -311,8 +319,11 @@ export default function ClientAuth() {
                   <div className="relative">
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
                     <input 
+                      id="signup-whatsapp"
+                      name="tel"
                       required={!isLogin}
                       type="tel" 
+                      autoComplete="tel"
                       value={formatPhone(whatsapp)}
                       onChange={(e) => setWhatsapp(parsePhone(e.target.value))}
                       placeholder="(11) 99999-9999"
@@ -329,8 +340,11 @@ export default function ClientAuth() {
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
               <input 
+                id="auth-email"
+                name="email"
                 required
                 type="email" 
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu@email.com"
@@ -355,8 +369,11 @@ export default function ClientAuth() {
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
               <input 
+                id="auth-password"
+                name="password"
                 required
                 type="password" 
+                autoComplete={isLogin ? "current-password" : "new-password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
@@ -392,6 +409,7 @@ export default function ClientAuth() {
           </button>
         </div>
       </motion.div>
+      </div>
     </div>
   );
 }

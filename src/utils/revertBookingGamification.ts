@@ -39,21 +39,7 @@ export async function revertCompletedBookingGamification(
       }
     }
 
-    // 2. Se não encontrou pelo ID, buscar pelo WhatsApp do cliente
-    if (!clientData && booking.clientWhatsapp) {
-      const cleanPhone = String(booking.clientWhatsapp).replace(/\D/g, '');
-      if (cleanPhone) {
-        const clientsRef = collection(db, 'clients');
-        const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
-        const snapshot = await getDocs(q);
-        if (!snapshot.empty) {
-          clientDoc = snapshot.docs[0];
-          clientId = clientDoc.id;
-          clientData = clientDoc.data();
-        }
-      }
-    }
-
+    // Apenas clientes cadastrados no Clube Navalha com clientId/awardedClientId explícito pontuaram e podem ter estorno
     if (!clientId || !clientData) {
       return { reverted: false };
     }

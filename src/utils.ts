@@ -84,13 +84,18 @@ export function parsePhone(val: string): string {
  * Mantém apenas letras minúsculas (a-z), números (0-9) e underscores opcionais se digitados.
  */
 export function sanitizeUsername(val: string): string {
-  if (!val) return '';
-  return val
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // remove acentos
-    .toLowerCase()
-    .replace(/\s+/g, '') // remove qualquer espaço
-    .replace(/[^a-z0-9_.]/g, ''); // apenas a-z, números e _
+  if (!val || typeof val !== 'string') return '';
+  try {
+    const withoutAccents = typeof val.normalize === 'function'
+      ? val.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      : val;
+    return withoutAccents
+      .toLowerCase()
+      .replace(/\s+/g, '') // remove qualquer espaço
+      .replace(/[^a-z0-9_.]/g, ''); // apenas a-z, números e _
+  } catch {
+    return val.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9_.]/g, '');
+  }
 }
 
 export interface UsernameValidationResult {

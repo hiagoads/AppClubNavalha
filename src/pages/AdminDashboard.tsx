@@ -387,31 +387,14 @@ export default function AdminDashboard() {
       let clientDoc: any = null;
       let clientData: any = null;
 
-      if (pointsToGive > 0 && activeInfo) {
+      if (pointsToGive > 0 && activeInfo && activeInfo.clientId) {
         try {
-          // 1. Prioridade absoluta: buscar pelo cadastro explícito do cliente no Clube Navalha (clientId)
-          if (activeInfo.clientId) {
-            const clientSnap = await getDoc(doc(db, 'clients', activeInfo.clientId));
-            if (clientSnap.exists()) {
-              clientDoc = clientSnap;
-              clientData = clientSnap.data();
-            }
-          }
-
-          // 2. Fallback estrito: buscar unicamente por telefone WhatsApp idêntico e completo (mínimo de 10 dígitos)
-          // REGRA CRÍTICA: NUNCA buscar por substring ou aproximação, e JAMAIS buscar por nome de cliente.
-          // Clientes sem cadastro no Clube Navalha NÃO DEVEM gerar pontos!
-          if (!clientDoc && activeInfo.clientWhatsapp) {
-            const cleanPhone = activeInfo.clientWhatsapp.replace(/\D/g, '');
-            if (cleanPhone && cleanPhone.length >= 10 && cleanPhone.length <= 13) {
-              const clientsRef = collection(db, 'clients');
-              const q = query(clientsRef, where('whatsapp', '==', cleanPhone));
-              const snapshot = await getDocs(q);
-              if (!snapshot.empty) {
-                clientDoc = snapshot.docs[0];
-                clientData = clientDoc.data();
-              }
-            }
+          // Apenas clientes cadastrados no Clube Navalha (com clientId vinculado) geram e acumulam pontos.
+          // Clientes sem cadastro no Clube Navalha NÃO geram pontos!
+          const clientSnap = await getDoc(doc(db, 'clients', activeInfo.clientId));
+          if (clientSnap.exists()) {
+            clientDoc = clientSnap;
+            clientData = clientSnap.data();
           }
         } catch (e) {
           console.error("Error looking up client for points:", e);
