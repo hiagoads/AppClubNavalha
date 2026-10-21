@@ -499,7 +499,13 @@ export default function ClientPanel() {
            animate={{ opacity: 1, scale: 1 }}
            className="flex flex-col items-center justify-center space-y-1 mt-6 sm:mt-0"
         >
-          <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-32 h-32 sm:w-40 sm:h-40 object-contain drop-shadow-2xl" />
+          <img 
+            src="/logo192.png" 
+            alt="Club Navalha Barbearia" 
+            onClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            title="Início - Club Navalha Barbearia"
+            className="w-32 h-32 sm:w-40 sm:h-40 object-contain drop-shadow-2xl cursor-pointer transition-transform hover:scale-105 active:scale-95" 
+          />
         </motion.div>
       </header>
 

@@ -64,7 +64,13 @@ export default function AdminLogin() {
         className="glass-card w-full max-w-md p-6 sm:p-10 bg-carbon-light"
       >
         <div className="text-center mb-8 sm:mb-12 flex flex-col items-center">
-          <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-40 h-40 object-contain drop-shadow-2xl mb-4" />
+          <img 
+            src="/logo192.png" 
+            alt="Club Navalha Barbearia" 
+            onClick={() => navigate('/')}
+            title="Ir para a tela inicial"
+            className="w-40 h-40 object-contain drop-shadow-2xl mb-4 cursor-pointer transition-transform hover:scale-105 active:scale-95" 
+          />
           <p className="text-white/40 text-xs sm:text-sm mt-4 uppercase tracking-widest border-t border-white/10 pt-4 w-full">Acesso Administrativo</p>
         </div>
 

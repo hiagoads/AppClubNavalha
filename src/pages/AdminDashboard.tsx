@@ -9,6 +9,7 @@ import { doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection,
 import { BookingStatus, Booking } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import BillingView from '../components/BillingView';
 import { BarbersManager } from '../components/BarbersManager';
 import ServicesManager from '../components/ServicesManager';
@@ -64,6 +65,7 @@ import { useProcessing } from '../hooks/useProcessing';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const { queue, activeBookings, loading } = useQueue();
   const { services } = useServices();
   const { barbers } = useBarbers();
@@ -794,7 +796,13 @@ export default function AdminDashboard() {
       <div className="bg-carbon-light border-b border-white/10 p-4 flex items-center justify-between z-20 sticky top-0">
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-10 h-10 object-contain drop-shadow-lg" />
+            <img 
+              src="/logo192.png" 
+              alt="Club Navalha Barbearia" 
+              onClick={() => navigate('/')}
+              title="Ir para a tela inicial"
+              className="w-10 h-10 object-contain drop-shadow-lg cursor-pointer transition-transform hover:scale-105 active:scale-95" 
+            />
             <button
               onClick={withProcessing(() => toggleOpenStatus(isOpen))}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${isOpen ? 'bg-green-500/10 border-green-500/30 text-green-500' : 'bg-red-500/10 border-red-500/30 text-red-500'}`}

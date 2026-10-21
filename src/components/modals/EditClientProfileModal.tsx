@@ -262,13 +262,16 @@ export function EditClientProfileModal({ isOpen, onClose, clientProfile }: EditC
           </div>
 
           <div>
-            <div className="flex justify-between items-center mb-2">
+            <div className="flex justify-between items-center mb-2 min-h-[1.25rem]">
               <label className="block text-xs uppercase tracking-widest text-white/50 font-bold">Nome de Usuário</label>
-              {username && username.length < 5 ? (
-                <span className="text-[10px] text-amber-400 font-medium">Mínimo 5 letras ({username.length}/5)</span>
-              ) : username ? (
-                <span className="text-[10px] text-emerald-400 font-medium font-mono">@{username}</span>
-              ) : null}
+              <span className={`text-[10px] font-medium transition-colors ${
+                username && username.length < 5 ? 'text-amber-400' :
+                username ? 'text-emerald-400 font-mono' : 'text-transparent select-none'
+              }`}>
+                {username && username.length < 5 
+                  ? `Mínimo 5 letras (${username.length}/5)` 
+                  : (username ? `@${username}` : '•')}
+              </span>
             </div>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -278,10 +281,11 @@ export function EditClientProfileModal({ isOpen, onClose, clientProfile }: EditC
                 type="text"
                 required
                 value={username}
-                onChange={(e) => setUsername(sanitizeUsername(e.target.value))}
-                minLength={5}
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
+                onBlur={() => setUsername(prev => sanitizeUsername(prev))}
                 autoCapitalize="none"
                 autoCorrect="off"
+                autoComplete="off"
                 spellCheck="false"
                 className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-gold/50 transition-colors font-mono text-sm lowercase"
                 placeholder="ex: joaosilva"

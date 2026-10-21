@@ -33,9 +33,17 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
         <div className="min-h-screen bg-carbon flex flex-col items-center justify-center p-6 text-center text-white">
           <div className="glass-card max-w-md p-8 border border-white/10 rounded-2xl bg-carbon-light">
             <h2 className="text-xl font-bold font-display text-gold mb-2">Ops! Algo deu errado</h2>
-            <p className="text-sm text-white/60 mb-6">
+            <p className="text-sm text-white/60 mb-4">
               Ocorreu uma instabilidade na exibição desta tela. Clique abaixo para recarregar o aplicativo.
             </p>
+            {this.state.error && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-5 text-left overflow-x-auto text-xs font-mono text-red-400">
+                <p className="font-bold">{this.state.error.name}: {this.state.error.message}</p>
+                {this.state.error.stack && (
+                  <p className="text-[10px] text-red-400/60 mt-1 whitespace-pre-wrap">{this.state.error.stack.split('\n').slice(0, 3).join('\n')}</p>
+                )}
+              </div>
+            )}
             <button
               onClick={() => {
                 this.setState({ hasError: false });

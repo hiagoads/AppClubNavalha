@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { motion, AnimatePresence } from 'framer-motion';
 import { X, Mail, Lock, User, Phone, Camera, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
@@ -182,13 +181,22 @@ export default function ClientAuth() {
       </button>
 
       <div className="w-full max-w-md my-auto py-6">
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card w-full p-6 sm:p-10 bg-carbon-light"
-        >
+        <div className="glass-card w-full p-6 sm:p-10 bg-carbon-light rounded-2xl border border-white/10 shadow-2xl">
           <div className="text-center mb-8 flex flex-col items-center">
-            <img src="/logo192.png" alt="Club Navalha Barbearia" className="w-28 h-28 sm:w-32 sm:h-32 object-contain drop-shadow-2xl mb-2" />
+            <button
+              type="button"
+              onClick={() => {
+                navigate('/');
+              }}
+              title="Ir para a tela inicial"
+              className="p-1 rounded-2xl hover:opacity-90 active:scale-95 transition-all cursor-pointer focus:outline-none flex flex-col items-center"
+            >
+              <img 
+                src="/logo192.png" 
+                alt="Club Navalha Barbearia" 
+                className="w-28 h-28 sm:w-32 sm:h-32 object-contain drop-shadow-2xl mb-2 cursor-pointer transition-transform hover:scale-105 active:scale-95" 
+              />
+            </button>
             <p className="text-gold font-sans text-[10px] sm:text-xs font-bold uppercase tracking-[0.2em] mb-4 mt-2">
               • Sistema de Fidelidade •
             </p>
@@ -198,17 +206,8 @@ export default function ClientAuth() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            <AnimatePresence>
-              {!isLogin && (
-                <motion.div
-                  key="signup-fields"
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-4"
-                >
-                
+            {!isLogin && (
+              <div className="space-y-4">
                 {/* Photo Upload */}
                 <div className="flex justify-center mb-6">
                   <div className="relative">
@@ -263,7 +262,7 @@ export default function ClientAuth() {
                 <div>
                   <label className="block text-xs uppercase tracking-widest text-white/50 mb-2">Data de Nascimento</label>
                   <div className="relative">
-                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
                     <input 
                       required={!isLogin}
                       type="date" 
@@ -275,36 +274,42 @@ export default function ClientAuth() {
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1.5">
-                    <label className="block text-xs uppercase tracking-widest text-white/50">Nome de Usuário</label>
-                    {fieldErrors.username ? (
-                      <span className="text-[10px] text-red-400 font-medium">{fieldErrors.username}</span>
-                    ) : username && username.length < 5 ? (
-                      <span className="text-[10px] text-amber-400 font-medium">Mínimo 5 letras ({username.length}/5)</span>
-                    ) : username ? (
-                      <span className="text-[10px] text-emerald-400 font-medium font-mono">@{username}</span>
-                    ) : null}
+                  <div className="flex justify-between items-center mb-1.5 min-h-[1.25rem]">
+                    <label htmlFor="signup-username" className="block text-xs uppercase tracking-widest text-white/50 cursor-pointer">Nome de Usuário</label>
+                    <span className={`text-[10px] font-medium transition-colors ${
+                      fieldErrors.username ? 'text-red-400' :
+                      username && username.length < 5 ? 'text-amber-400' :
+                      username ? 'text-emerald-400 font-mono' : 'text-transparent select-none'
+                    }`}>
+                      {fieldErrors.username 
+                        ? fieldErrors.username 
+                        : (username && username.length < 5 
+                            ? `Mínimo 5 letras (${username.length}/5)` 
+                            : (username ? `@${username}` : '•'))}
+                    </span>
                   </div>
                   <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
                     <input 
                       id="signup-username"
-                      name="username"
+                      name="club_username"
                       required={!isLogin}
                       type="text" 
                       value={username}
                       onChange={(e) => {
-                        const clean = sanitizeUsername(e.target.value);
-                        setUsername(clean);
+                        const val = e.target.value.toLowerCase().replace(/\s+/g, '');
+                        setUsername(val);
                         if (fieldErrors.username) {
                           setFieldErrors(prev => ({ ...prev, username: undefined }));
                         }
                       }}
+                      onBlur={() => {
+                        setUsername(prev => sanitizeUsername(prev));
+                      }}
                       placeholder="ex: joaosilva"
-                      minLength={5}
                       autoCapitalize="none"
                       autoCorrect="off"
-                      autoComplete="username"
+                      autoComplete="off"
                       spellCheck="false"
                       className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm font-mono lowercase"
                     />
@@ -315,9 +320,12 @@ export default function ClientAuth() {
                 </div>
                 
                 <div>
-                  <div className="flex justify-between items-center mb-2"><label className="block text-xs uppercase tracking-widest text-white/50">WhatsApp</label>{fieldErrors.whatsapp && <span className="text-[10px] text-red-500">{fieldErrors.whatsapp}</span>}</div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-xs uppercase tracking-widest text-white/50">WhatsApp</label>
+                    {fieldErrors.whatsapp && <span className="text-[10px] text-red-500">{fieldErrors.whatsapp}</span>}
+                  </div>
                   <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
                     <input 
                       id="signup-whatsapp"
                       name="tel"
@@ -331,84 +339,86 @@ export default function ClientAuth() {
                     />
                   </div>
                 </div>
-              </motion.div>
+              </div>
             )}
-          </AnimatePresence>
 
-          <div>
-            <div className="flex justify-between items-center mb-2"><label className="block text-xs uppercase tracking-widest text-white/50">E-mail</label>{fieldErrors.email && <span className="text-[10px] text-red-500">{fieldErrors.email}</span>}</div>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-              <input 
-                id="auth-email"
-                name="email"
-                required
-                type="email" 
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="seu@email.com"
-                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
-              />
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-xs uppercase tracking-widest text-white/50">E-mail</label>
+                {fieldErrors.email && <span className="text-[10px] text-red-500">{fieldErrors.email}</span>}
+              </div>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
+                <input 
+                  id="auth-email"
+                  name="email"
+                  required
+                  type="email" 
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="seu@email.com"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
+                />
+              </div>
             </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-xs uppercase tracking-widest text-white/50">Senha</label>
+                {isLogin && (
+                  <button 
+                    type="button" 
+                    onClick={handleResetPassword}
+                    className="text-[10px] uppercase tracking-widest text-gold hover:text-gold-light transition-colors"
+                  >
+                    Esqueceu a senha?
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
+                <input 
+                  id="auth-password"
+                  name="password"
+                  required
+                  type="password" 
+                  autoComplete={isLogin ? "current-password" : "new-password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
+                />
+              </div>
+            </div>
+
+            <button 
+              disabled={loading}
+              type="submit"
+              className="w-full gold-gradient text-carbon font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95 disabled:opacity-50 mt-4 cursor-pointer"
+            >
+              {loading ? 'Aguarde...' : (isLogin ? 'ENTRAR NO CLUBE' : 'CRIAR CONTA')}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center border-t border-white/10 pt-6">
+            <p className="text-white/40 text-sm">
+              {isLogin ? 'Ainda não faz parte do clube?' : 'Já possui uma conta?'}
+            </p>
+            <button 
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setEmail('');
+                setPassword('');
+                setUsername('');
+                setWhatsapp('');
+              }}
+              className="text-gold hover:text-gold-light font-bold mt-2 transition-colors uppercase tracking-wider text-sm cursor-pointer"
+            >
+              {isLogin ? 'Cadastre-se agora' : 'Fazer login'}
+            </button>
           </div>
-
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="block text-xs uppercase tracking-widest text-white/50">Senha</label>
-              {isLogin && (
-                <button 
-                  type="button" 
-                  onClick={handleResetPassword}
-                  className="text-[10px] uppercase tracking-widest text-gold hover:text-gold-light transition-colors"
-                >
-                  Esqueceu a senha?
-                </button>
-              )}
-            </div>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-              <input 
-                id="auth-password"
-                name="password"
-                required
-                type="password" 
-                autoComplete={isLogin ? "current-password" : "new-password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-gold/50 text-sm"
-              />
-            </div>
-          </div>
-
-          <button 
-            disabled={loading}
-            type="submit"
-            className="w-full gold-gradient text-carbon font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95 disabled:opacity-50 mt-4"
-          >
-            {loading ? 'Aguarde...' : (isLogin ? 'ENTRAR NO CLUBE' : 'CRIAR CONTA')}
-          </button>
-        </form>
-
-        <div className="mt-6 text-center border-t border-white/10 pt-6">
-          <p className="text-white/40 text-sm">
-            {isLogin ? 'Ainda não faz parte do clube?' : 'Já possui uma conta?'}
-          </p>
-          <button 
-            onClick={() => {
-              setIsLogin(!isLogin);
-              setEmail('');
-              setPassword('');
-              setUsername('');
-              setWhatsapp('');
-            }}
-            className="text-gold hover:text-gold-light font-bold mt-2 transition-colors uppercase tracking-wider text-sm"
-          >
-            {isLogin ? 'Cadastre-se agora' : 'Fazer login'}
-          </button>
         </div>
-      </motion.div>
       </div>
     </div>
   );
