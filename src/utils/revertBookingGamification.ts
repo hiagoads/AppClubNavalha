@@ -95,9 +95,27 @@ export async function revertCompletedBookingGamification(
       currentPts
     );
 
+    const depId = (booking as any).awardedToDependentId || (booking as any).dependentId;
+    let updatedDependents = clientData.dependents;
+    const nowIso = new Date().toISOString();
+
+    if (depId && Array.isArray(clientData.dependents)) {
+      updatedDependents = clientData.dependents.map((dep: any) => {
+        if (dep.id === depId) {
+          return {
+            ...dep,
+            points: Math.max(0, (dep.points || 0) - pointsToDeduct),
+            weeklyPoints: Math.max(0, (dep.weeklyPoints || 0) - pointsToDeduct),
+            lastPointsUpdate: nowIso
+          };
+        }
+        return dep;
+      });
+    }
+
     const newPts = Math.max(0, currentPts - pointsToDeduct);
     const newSeasonal = Math.max(0, currentSeasonal - pointsToDeduct);
-    const newWeekly = Math.max(0, currentWeekly - pointsToDeduct);
+    const newWeekly = depId ? currentWeekly : Math.max(0, currentWeekly - pointsToDeduct);
     const newLifetime = Math.max(0, currentLifetime - pointsToDeduct);
 
     // Reduz o pico sazonal proporcionalmente à dedução
@@ -136,15 +154,12 @@ export async function revertCompletedBookingGamification(
       for (const [tierNameKey, tierLvl] of Object.entries(tierOrder)) {
         if (titleLower.includes(tierNameKey) || (b.rankKey && b.rankKey.includes(tierNameKey))) {
           if (tierLvl > newTierLevel) {
-            // Este bônus foi concedido por uma patente que o cliente não possui mais após a exclusão do serviço
             return false;
           }
         }
       }
       return true;
     });
-
-    const nowIso = new Date().toISOString();
 
     const updatePayload: any = {
       points: newPts,
@@ -157,6 +172,7 @@ export async function revertCompletedBookingGamification(
       highestTierLevel: newTierLevel,
       level: newLevel,
       bonuses: updatedBonuses,
+      dependents: updatedDependents,
       manualTierOverride: false,
       manualTierLevel: newTierLevel,
       lastPointsUpdate: nowIso

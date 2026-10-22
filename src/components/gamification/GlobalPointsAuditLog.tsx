@@ -15,6 +15,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { PointTransaction } from '../../types';
+import toast from 'react-hot-toast';
 
 interface GlobalPointsAuditLogProps {
   transactions: PointTransaction[];
@@ -113,7 +114,11 @@ export function GlobalPointsAuditLog({
     );
   };
 
-  const handleClientClick = (clientId: string) => {
+  const handleClientClick = (clientId?: string) => {
+    if (!clientId) {
+      toast.error('Cliente não identificado nesta transação.');
+      return;
+    }
     const found = clients.find(c => c.id === clientId);
     if (found) {
       onOpenClientAudit(found);
@@ -282,14 +287,21 @@ export function GlobalPointsAuditLog({
                       </td>
 
                       <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => handleClientClick(t.clientId)}
-                          className="font-bold text-white hover:text-gold transition-colors flex items-center gap-1.5 text-left"
-                        >
-                          <span>{t.clientName || 'Cliente'}</span>
-                          <ExternalLink className="w-3 h-3 text-white/30" />
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleClientClick(t.clientId)}
+                            className="font-bold text-white hover:text-gold transition-colors flex items-center gap-1 text-left"
+                          >
+                            <span>{t.clientName || 'Cliente'}</span>
+                            <ExternalLink className="w-3 h-3 text-white/30" />
+                          </button>
+                          {t.dependentName && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-medium">
+                              Filho: {t.dependentName}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">

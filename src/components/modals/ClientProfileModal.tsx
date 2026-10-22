@@ -496,6 +496,32 @@ export function ClientProfileModal({ isOpen, onClose, clientProfile, defaultAvat
             </div>
           )}
 
+          {/* Dependentes / Filhos vinculados à conta */}
+          {clientProfile?.dependents && clientProfile.dependents.length > 0 && (
+            <div className="mb-8">
+              <h3 className="text-xs uppercase tracking-widest text-white/40 font-bold mb-4 ml-1 flex items-center gap-2">
+                <User className="w-4 h-4 text-purple-400" /> Dependentes Cadastrados
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {clientProfile.dependents.map(dep => (
+                  <div 
+                    key={dep.id} 
+                    className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <p className="font-bold text-sm text-white truncate">{dep.name}</p>
+                      <p className="text-[10px] text-purple-300/80 font-medium mt-0.5">Dependente Vinculado</p>
+                    </div>
+                    <div className="text-right shrink-0 bg-purple-500/10 border border-purple-500/20 px-3 py-1.5 rounded-xl">
+                      <span className="font-mono font-bold text-sm text-purple-300 block">{(dep.points || 0).toLocaleString('pt-BR')}</span>
+                      <span className="text-[9px] text-white/40 uppercase tracking-widest font-semibold block">pontos</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="mb-8">
             <h3 className="text-xs uppercase tracking-widest text-white/40 font-bold mb-4 ml-1 flex items-center gap-2">
               <Gift className="w-4 h-4 text-gold" /> Prêmios Disponíveis

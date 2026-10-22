@@ -67,10 +67,40 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
       const { startTime } = getCurrentWeekWindow(lastWeekClosedAt);
 
       // Filtra competidores da semana:
-      // O ranking da semana considera única e exclusivamente a pontuação semanal legítima (weeklyPoints > 0)
-      const activeCompetitors = allClients.filter((c: any) => {
+      // O ranking da semana considera a pontuação semanal legítima (weeklyPoints > 0)
+      // Inclui tanto contas titulares quanto subcontas de dependentes
+      const activeCompetitors: any[] = [];
+      allClients.forEach((c: any) => {
         const weekly = Number(c.weeklyPoints || 0);
-        return weekly > 0;
+        if (weekly > 0) {
+          activeCompetitors.push(c);
+        }
+        if (Array.isArray(c.dependents)) {
+          c.dependents.forEach((dep: any) => {
+            const depWeekly = Number(dep.weeklyPoints || 0);
+            if (depWeekly > 0) {
+              activeCompetitors.push({
+                id: `${c.id}_dep_${dep.id}`,
+                isDependent: true,
+                dependentId: dep.id,
+                parentId: c.id,
+                parentName: c.username || c.firstName || 'Responsável',
+                parentAvatarUrl: c.avatarUrl || '',
+                username: dep.name,
+                firstName: dep.name,
+                avatarUrl: dep.avatarUrl || c.avatarUrl || '',
+                weeklyPoints: depWeekly,
+                points: dep.points || depWeekly,
+                seasonalPoints: dep.points || depWeekly,
+                lifetimePoints: dep.points || depWeekly,
+                level: c.level || 1,
+                highestTierLevel: c.highestTierLevel || 1,
+                seasonHighestTierLevel: c.seasonHighestTierLevel || c.highestTierLevel || 1,
+                lastPointsUpdate: dep.lastPointsUpdate || c.lastPointsUpdate
+              });
+            }
+          });
+        }
       });
 
       // Aplica a ordenação oficial com os 3 critérios de desempate
@@ -260,7 +290,7 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
               {/* Resumo da Temporada Atual */}
               <div className="rounded-2xl p-4 sm:p-5 bg-gradient-to-br from-white/[0.08] via-white/[0.04] to-transparent border border-white/10 relative overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs uppercase font-bold tracking-widest text-gold bg-gold/10 px-2.5 py-1 rounded-lg border border-gold/30">
                       Temporada {currentSeasonNumber}
                     </span>
@@ -276,9 +306,15 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-xs text-white/60 bg-black/30 px-3 py-1 rounded-xl border border-white/5">
-                    <Clock className="w-3.5 h-3.5 text-gold" />
-                    <span className="font-bold text-white">{seasonDates.daysRemaining}</span> dias restantes
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 text-xs text-white/70 bg-black/30 px-3 py-1 rounded-xl border border-white/5">
+                      <Calendar className="w-3.5 h-3.5 text-gold" />
+                      <span>Término: <strong className="text-white font-mono">{seasonDates.endDateFormatted}</strong></span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-white/60 bg-black/30 px-3 py-1 rounded-xl border border-white/5">
+                      <Clock className="w-3.5 h-3.5 text-gold" />
+                      <span className="font-bold text-white">{seasonDates.daysRemaining}</span> dias
+                    </div>
                   </div>
                 </div>
 
@@ -573,15 +609,25 @@ export function RankingModal({ isOpen, onClose, currentUserId, defaultAvatar }: 
                           </div>
 
                           <div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <h4 className={`font-bold text-sm ${
                                 isFirst ? 'text-yellow-400' : isSecond ? 'text-gray-200' : isThird ? 'text-amber-500' : 'text-white'
                               }`}>
                                 {client.username}
                               </h4>
+                              {client.isDependent && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold">
+                                  Dependente de {client.parentName}
+                                </span>
+                              )}
                               {isCurrentUser && (
                                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-gold/20 text-gold font-bold">
                                   Você
+                                </span>
+                              )}
+                              {client.isDependent && client.parentId === currentUserId && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/30 text-purple-200 border border-purple-400/40 font-bold">
+                                  Seu Dependente
                                 </span>
                               )}
                             </div>

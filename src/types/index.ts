@@ -68,6 +68,10 @@ export interface Booking {
   pointsAwarded?: number;
   awardedClientId?: string;
   clientId?: string; // Linked Clube Navalha client account ID
+  dependentId?: string; // ID do dependente selecionado para o corte
+  dependentName?: string; // Nome do dependente
+  awardedToDependentId?: string; // ID do dependente que recebeu os pontos deste corte
+  awardedDependentName?: string; // Nome do dependente premiado
   // Notification Flags
   notifiedJoined?: boolean;
   notifiedPos2?: boolean;
@@ -147,6 +151,17 @@ export interface PastWeek {
   createdAt: string;
 }
 
+export interface ClientDependent {
+  id: string;
+  name: string;
+  dateOfBirth?: string;
+  points: number;
+  weeklyPoints?: number; // Pontos do ranking semanal
+  avatarUrl?: string;
+  lastPointsUpdate?: string;
+  createdAt: string;
+}
+
 export interface ClientProfile {
   id: string; // The uid from auth
   username: string;
@@ -169,6 +184,7 @@ export interface ClientProfile {
   manualTierOverride?: boolean;
   lastPointsUpdate?: string; // Timestamp de quando os pontos foram atualizados (critério de desempate)
   bonuses?: ClientBonus[];
+  dependents?: ClientDependent[]; // Dependentes/filhos vinculados à conta
   createdAt: string;
 }
 
@@ -223,8 +239,10 @@ export interface PointTransaction {
   clientId: string;
   clientName?: string;
   clientAvatar?: string;
+  dependentId?: string;
+  dependentName?: string;
   points: number;
-  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction' | 'reverted' | 'tier_override';
+  type: 'earned' | 'redeem' | 'manual_add' | 'manual_remove' | 'rank_bonus' | 'correction' | 'reverted' | 'tier_override' | 'adjusted';
   scope?: 'balance_only' | 'all_balances' | 'custom_adjustment' | 'custom_direct' | 'weekly_only' | 'seasonal_only';
   description: string;
   balanceAfter?: number;

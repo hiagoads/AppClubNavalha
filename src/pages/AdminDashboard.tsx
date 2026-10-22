@@ -6,7 +6,7 @@ import { useBreaks } from '../hooks/useBreaks';
 import { useSettings } from '../hooks/useSettings';
 import { db, auth } from '../lib/firebase';
 import { doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc, collection, setDoc, writeBatch, deleteField, query, where, getDocs, increment } from 'firebase/firestore';
-import { BookingStatus, Booking } from '../types';
+import { BookingStatus, Booking, ClientDependent } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -52,7 +52,7 @@ import { GamificationManager } from '../components/GamificationManager';
 import { VipRoomManager } from '../components/VipRoomManager';
 import { VipQueueQuickBar } from '../components/vip/VipQueueQuickBar';
 import { AdminSidebar } from '../components/AdminSidebar';
-import { AddClientModal } from '../components/modals/AddClientModal';
+import { AddClientModal, NewClientData } from '../components/modals/AddClientModal';
 import { AddBreakModal } from '../components/modals/AddBreakModal';
 import { CallingBookingModal } from '../components/modals/CallingBookingModal';
 import { CancelingBookingModal } from '../components/modals/CancelingBookingModal';
@@ -97,6 +97,10 @@ export default function AdminDashboard() {
   const [cancelingBooking, setCancelingBooking] = useState<any>(null);
   const [completingBooking, setCompletingBooking] = useState<any>(null);
   const [completionBarberId, setCompletionBarberId] = useState<string>('');
+  const [completingClientDependents, setCompletingClientDependents] = useState<ClientDependent[]>([]);
+  const [completingParentName, setCompletingParentName] = useState<string>('');
+  const [completingAwardTarget, setCompletingAwardTarget] = useState<string>('parent');
+  const [completingPointsToGive, setCompletingPointsToGive] = useState<number>(0);
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
@@ -105,16 +109,7 @@ export default function AdminDashboard() {
     timeStr: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
     durationStr: '60'
   });
-  const [newClientData, setNewClientData] = useState<{
-    name: string;
-    whatsapp: string;
-    serviceId: string;
-    barberId: string;
-    type: string;
-    scheduledTime: string;
-    scheduledDate: string;
-    clientId?: string;
-  }>({
+  const [newClientData, setNewClientData] = useState<NewClientData>({
     name: '',
     whatsapp: '',
     serviceId: '',
@@ -123,6 +118,8 @@ export default function AdminDashboard() {
     scheduledTime: '',
     scheduledDate: new Date().toISOString().split('T')[0],
     clientId: '',
+    dependentId: undefined,
+    dependentName: undefined
   });
 
   const [editingServicesBooking, setEditingServicesBooking] = useState<{id: string, serviceId: string, expectedPrice: number | string} | null>(null);
@@ -184,6 +181,10 @@ export default function AdminDashboard() {
         createdAt: serverTimestamp(),
         expectedPrice: expectedPrice,
         ...(newClientData.clientId ? { clientId: newClientData.clientId } : {}),
+        ...(newClientData.dependentId ? { 
+          dependentId: newClientData.dependentId, 
+          dependentName: newClientData.dependentName || newClientData.name 
+        } : {}),
         ...(isScheduled && { scheduledTime: newClientData.scheduledTime, scheduledDate: newClientData.scheduledDate }),
       });
       toast.success(isScheduled ? 'Cliente agendado com sucesso' : 'Cliente adicionado à fila');
@@ -196,7 +197,9 @@ export default function AdminDashboard() {
         type: 'walk-in', 
         scheduledTime: '', 
         scheduledDate: new Date().toISOString().split('T')[0],
-        clientId: '' 
+        clientId: '',
+        dependentId: undefined,
+        dependentName: undefined
       });
     } catch(err) {
       toast.error('Erro ao adicionar cliente');
@@ -328,9 +331,61 @@ export default function AdminDashboard() {
     }
   };
 
-  const openCompleteModal = (booking: any) => {
+  const openCompleteModal = async (booking: any) => {
     setCompletingBooking(booking);
     setCompletionBarberId(booking.barberId && booking.barberId !== 'any' ? booking.barberId : '');
+
+    // Calculate expected points for modal preview
+    let servicesOnlyPrice = 0;
+    let totalCalculated = 0;
+    if (booking && booking.serviceId) {
+      const parsedServices = parseServiceString(booking.serviceId);
+      parsedServices.forEach(ps => {
+        const s = services.find(srv => srv.name.trim().toLowerCase() === ps.name.trim().toLowerCase() || srv.id === ps.name);
+        if (s) {
+          const promo = parsePrice(s.promoPrice);
+          const reg = parsePrice(s.price);
+          const itemTotal = ((promo > 0) ? promo : reg) * ps.quantity;
+          totalCalculated += itemTotal;
+          if (!s.isProduct) servicesOnlyPrice += itemTotal;
+        }
+      });
+    }
+    let pts = 0;
+    if (booking && booking.expectedPrice !== undefined && booking.expectedPrice !== null) {
+      const finalP = Number(booking.expectedPrice);
+      if (totalCalculated > 0 && servicesOnlyPrice > 0) {
+        pts = Math.floor((finalP * (servicesOnlyPrice / totalCalculated)) * 100);
+      } else if (totalCalculated === 0) {
+        pts = Math.floor(finalP * 100);
+      }
+    } else {
+      pts = Math.floor(servicesOnlyPrice * 100);
+    }
+    setCompletingPointsToGive(pts);
+
+    if (booking.clientId) {
+      try {
+        const clientSnap = await getDoc(doc(db, 'clients', booking.clientId));
+        if (clientSnap.exists()) {
+          const cData = clientSnap.data();
+          const deps = (cData.dependents || []) as ClientDependent[];
+          setCompletingClientDependents(deps);
+          setCompletingParentName(cData.username || cData.firstName || '');
+          if (booking.dependentId && deps.some(d => d.id === booking.dependentId)) {
+            setCompletingAwardTarget(booking.dependentId);
+          } else {
+            setCompletingAwardTarget('parent');
+          }
+          return;
+        }
+      } catch (e) {
+        console.error("Error loading dependents for completion modal:", e);
+      }
+    }
+    setCompletingClientDependents([]);
+    setCompletingParentName('');
+    setCompletingAwardTarget('parent');
   };
 
   const confirmCompleteService = async () => {
@@ -403,6 +458,11 @@ export default function AdminDashboard() {
         }
       }
 
+      let awardedToDep: ClientDependent | null = null;
+      if (completingAwardTarget !== 'parent' && clientData?.dependents) {
+        awardedToDep = (clientData.dependents as ClientDependent[]).find((d: any) => d.id === completingAwardTarget) || null;
+      }
+
       await updateDoc(bookingRef, {
         status: BookingStatus.COMPLETED,
         estimatedEndTime: serverTimestamp(),
@@ -411,11 +471,105 @@ export default function AdminDashboard() {
         isPaid: activeInfo.isPaid !== false,
         paidAt: activeInfo.isPaid !== false ? serverTimestamp() : null,
         pointsAwarded: (clientDoc && pointsToGive > 0) ? pointsToGive : 0,
-        awardedClientId: clientDoc ? clientDoc.id : null
+        awardedClientId: clientDoc ? clientDoc.id : null,
+        ...(awardedToDep ? {
+          awardedToDependentId: awardedToDep.id,
+          awardedDependentName: awardedToDep.name
+        } : {})
       });
 
-      // Gamification: Give points to client if registered (Apenas serviços pontuam, produtos NÃO pontuam)
-      if (pointsToGive > 0 && clientDoc && clientData) {
+      // Gamification: Give points to dependent or parent
+      if (pointsToGive > 0 && clientDoc && clientData && awardedToDep) {
+        try {
+          const nowIso = new Date().toISOString();
+
+          // 1. Atualizar subconta do dependente: saldo e ranking semanal
+          const updatedDependents = ((clientData.dependents || []) as ClientDependent[]).map((dep: ClientDependent) => {
+            if (dep.id === awardedToDep!.id) {
+              return {
+                ...dep,
+                points: (dep.points || 0) + pointsToGive,
+                weeklyPoints: (dep.weeklyPoints || 0) + pointsToGive,
+                lastPointsUpdate: nowIso
+              };
+            }
+            return dep;
+          });
+
+          // 2. Conta do responsável: ganha Pontos XP (saldo de resgate), XP Sazonal, Vitalício e progressão de Patente
+          const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
+          const newLifetime = existingLifetime + pointsToGive;
+          const newSeasonal = (clientData.seasonalPoints || 0) + pointsToGive;
+          const newSeasonHighest = Math.max(
+            clientData.seasonHighestPoints ?? 0,
+            clientData.highestSeasonalPoints ?? 0,
+            newSeasonal,
+            (clientData.points || 0) + pointsToGive
+          );
+
+          const updatedTier = getClientTier({ 
+            ...clientData, 
+            points: (clientData.points || 0) + pointsToGive,
+            seasonalPoints: newSeasonal,
+            seasonHighestPoints: newSeasonHighest,
+            lifetimePoints: newLifetime 
+          }, thresholds);
+
+          const newHighestTier = updatedTier.tierLevel;
+
+          // Salva no responsável (sem alterar o weeklyPoints do responsável, pois o ranking semanal é do dependente)
+          await updateDoc(doc(db, 'clients', clientDoc.id), {
+            points: increment(pointsToGive),
+            seasonalPoints: increment(pointsToGive),
+            seasonHighestPoints: newSeasonHighest,
+            highestSeasonalPoints: newSeasonHighest,
+            seasonHighestTierLevel: newHighestTier,
+            highestTierLevel: newHighestTier,
+            lifetimePoints: increment(pointsToGive),
+            level: updatedTier.tierLevel,
+            manualTierOverride: false,
+            manualTierLevel: newHighestTier,
+            dependents: updatedDependents,
+            lastPointsUpdate: nowIso
+          });
+
+          await addDoc(collection(db, 'point_transactions'), {
+            clientId: clientDoc.id,
+            clientName: clientData.username || clientData.firstName || activeInfo.clientName,
+            dependentId: awardedToDep.id,
+            dependentName: awardedToDep.name,
+            points: pointsToGive,
+            type: 'earned',
+            description: `Corte de ${awardedToDep.name}: XP e Patente p/ ${clientData.username || clientData.firstName || 'Responsável'}, Ranking Semanal p/ ${awardedToDep.name}`,
+            bookingId: completingBooking.id,
+            weeklyPointsChange: pointsToGive,
+            balanceAfter: (clientData.points || 0) + pointsToGive,
+            createdAt: nowIso
+          });
+
+          // Sincroniza bônus de patente do responsável caso tenha subido de nível
+          const updatedClientForBonus = {
+            ...clientData,
+            points: (clientData.points || 0) + pointsToGive,
+            seasonalPoints: newSeasonal,
+            seasonHighestPoints: newSeasonHighest,
+            highestSeasonalPoints: newSeasonHighest,
+            seasonHighestTierLevel: newHighestTier,
+            highestTierLevel: newHighestTier,
+            lifetimePoints: newLifetime,
+            level: updatedTier.level
+          };
+          const rankBonusResult = await checkAndSyncClientRankBonuses(clientDoc.id, updatedClientForBonus, thresholds);
+
+          toast.success(`Corte de ${awardedToDep.name} concluído! +${pointsToGive} XP/Patente para o responsável e +${pointsToGive} pts no Ranking Semanal de ${awardedToDep.name}!`);
+          if (rankBonusResult && rankBonusResult.awardedBonuses && rankBonusResult.awardedBonuses.length > 0) {
+            const bonusTitles = rankBonusResult.awardedBonuses.map(b => b.title).join(', ');
+            toast.success(`🎉 O responsável subiu de Patente! Bônus concedido: ${bonusTitles}`, { duration: 6000 });
+          }
+        } catch (e) {
+          console.error("Error giving points to dependent and parent:", e);
+        }
+      } else if (pointsToGive > 0 && clientDoc && clientData) {
         try {
           // Client found! Add points for services
           const existingLifetime = clientData.lifetimePoints ?? Math.max(clientData.points || 0, clientData.seasonalPoints || 0);
@@ -993,11 +1147,23 @@ export default function AdminDashboard() {
       />
       <CompletingBookingModal
         booking={completingBooking}
-        onClose={() => { setCompletingBooking(null); setCompletionBarberId(""); }}
+        onClose={() => { 
+          setCompletingBooking(null); 
+          setCompletionBarberId(""); 
+          setCompletingClientDependents([]);
+          setCompletingParentName("");
+          setCompletingAwardTarget("parent");
+          setCompletingPointsToGive(0);
+        }}
         barbers={barbers}
         completionBarberId={completionBarberId}
         setCompletionBarberId={setCompletionBarberId}
         onConfirm={withProcessing(confirmCompleteService)}
+        dependents={completingClientDependents}
+        parentClientName={completingParentName}
+        awardTarget={completingAwardTarget}
+        setAwardTarget={setCompletingAwardTarget}
+        pointsToGive={completingPointsToGive}
       />
 
 
@@ -1046,6 +1212,14 @@ export default function AdminDashboard() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap mb-1">
                                   <h3 className="text-2xl font-display font-bold truncate">{activeB.clientName}</h3>
+                                  {activeB.dependentName && (
+                                    <span 
+                                      className="inline-flex items-center gap-1 bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
+                                      title={`Dependente: ${activeB.dependentName}`}
+                                    >
+                                      Dependente: {activeB.dependentName}
+                                    </span>
+                                  )}
                                   {activeB.clientId && (
                                     <span 
                                       className="inline-flex items-center gap-1 bg-gold/15 text-gold border border-gold/30 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider"
@@ -1214,6 +1388,14 @@ export default function AdminDashboard() {
                           <div className="text-white/20 font-mono text-xs sm:text-sm w-4 sm:w-6 pt-0.5 sm:pt-0 shrink-0">{idx + 1}</div>
                           <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
                             <h4 className="font-bold text-white/90 truncate text-sm sm:text-base max-w-full">{item.clientName}</h4>
+                            {item.dependentName && (
+                              <span 
+                                className="inline-flex items-center gap-1 bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0" 
+                                title={`Corte para o dependente: ${item.dependentName}`}
+                              >
+                                Dependente: {item.dependentName}
+                              </span>
+                            )}
                             {item.clientId && (
                               <span 
                                 className="inline-flex items-center gap-1 bg-gold/15 text-gold border border-gold/30 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0" 

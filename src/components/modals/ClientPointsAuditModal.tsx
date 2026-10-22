@@ -69,21 +69,25 @@ export function ClientPointsAuditModal({
   const [tierOverrideReason, setTierOverrideReason] = useState('');
   const [isSubmittingTier, setIsSubmittingTier] = useState(false);
 
+  const resolvedClientId = client?.id || client?.clientId || client?.uid || (typeof client === 'string' ? client : '');
+
   useEffect(() => {
     if (client) {
-      setLiveClient(client);
-      const currentTier = client.seasonHighestTierLevel ?? client.highestTierLevel ?? 1;
+      const cid = client?.id || client?.clientId || client?.uid || (typeof client === 'string' ? client : '');
+      const normalized = typeof client === 'object' ? { ...client, id: cid } : { id: cid, username: 'Cliente' };
+      setLiveClient(normalized);
+      const currentTier = normalized.seasonHighestTierLevel ?? normalized.highestTierLevel ?? 1;
       setSelectedTierLevel(currentTier);
-      setCustomDirectPts(String(client.points ?? 0));
-      setCustomDirectSeasonal(String(client.seasonalPoints ?? 0));
-      setCustomDirectWeekly(String(client.weeklyPoints ?? 0));
+      setCustomDirectPts(String(normalized.points ?? 0));
+      setCustomDirectSeasonal(String(normalized.seasonalPoints ?? 0));
+      setCustomDirectWeekly(String(normalized.weeklyPoints ?? 0));
     }
   }, [client]);
 
   // Escuta em tempo real o documento do cliente para atualizar instantaneamente o Saldo Atual na tela
   useEffect(() => {
-    if (!isOpen || !client?.id) return;
-    const unsub = onSnapshot(doc(db, 'clients', client.id), (snap) => {
+    if (!isOpen || !resolvedClientId) return;
+    const unsub = onSnapshot(doc(db, 'clients', resolvedClientId), (snap) => {
       if (snap.exists()) {
         const d: any = { id: snap.id, ...snap.data() };
         setLiveClient(d);
@@ -91,17 +95,19 @@ export function ClientPointsAuditModal({
         setCustomDirectSeasonal(String(d.seasonalPoints ?? 0));
         setCustomDirectWeekly(String(d.weeklyPoints ?? 0));
       }
+    }, (err) => {
+      if (err.code !== 'permission-denied') console.warn('Erro ao escutar cliente:', err);
     });
     return () => unsub();
-  }, [isOpen, client?.id]);
+  }, [isOpen, resolvedClientId]);
 
   useEffect(() => {
-    if (!isOpen || !client?.id) return;
+    if (!isOpen || !resolvedClientId) return;
 
     setLoadingTransactions(true);
     const q = query(
       collection(db, 'point_transactions'),
-      where('clientId', '==', client.id)
+      where('clientId', '==', resolvedClientId)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -120,11 +126,12 @@ export function ClientPointsAuditModal({
     });
 
     return () => unsubscribe();
-  }, [isOpen, client?.id]);
+  }, [isOpen, resolvedClientId]);
 
   if (!isOpen || !client) return null;
 
-  const activeClient = liveClient || client;
+  const targetClientId = liveClient?.id || client?.id || liveClient?.clientId || client?.clientId || liveClient?.uid || client?.uid || resolvedClientId || '';
+  const activeClient = { ...(client || {}), ...(liveClient || {}), id: targetClientId };
   const currentPoints = activeClient?.points ?? 0;
   const isNegative = currentPoints < 0;
 
@@ -174,8 +181,17 @@ export function ClientPointsAuditModal({
       }
     }
 
-    const peak = Math.max(0, resSeasonal, resPts);
-    const newTier = getLevelTier(peak, thresholds, 1);
+    // A patente é calculada EXCLUSIVAMENTE a partir dos pontos da temporada (resSeasonal e pico sazonal)
+    // O ajuste exclusivo no saldo gastável (balance_only) ou no ranking semanal (weekly_only) NUNCA altera a patente!
+    const effectivePeakSeasonal = Math.max(
+      0,
+      activeClient?.seasonHighestPoints ?? 0,
+      activeClient?.highestSeasonalPoints ?? 0,
+      resSeasonal
+    );
+    const newTier = (adjScope === 'balance_only' || adjScope === 'weekly_only')
+      ? getClientTier(activeClient, thresholds)
+      : getLevelTier(effectivePeakSeasonal, thresholds, 1);
     const oldTier = getClientTier(activeClient, thresholds);
 
     return {
@@ -192,12 +208,16 @@ export function ClientPointsAuditModal({
 
   // Função para corrigir saldo negativo para 0
   const handleFixNegativeBalance = async () => {
-    if (!activeClient?.id) return;
+    const targetId = activeClient?.id || targetClientId;
+    if (!targetId) {
+      toast.error('Identificador do cliente não encontrado.');
+      return;
+    }
     setIsFixingNegative(true);
     try {
-      const clientRef = doc(db, 'clients', activeClient.id);
+      const clientRef = doc(db, 'clients', targetId);
       const snap = await getDoc(clientRef);
-      const data = snap.exists() ? snap.data() : activeClient;
+      const data = snap.exists() ? { id: snap.id, ...snap.data() } : { ...activeClient, id: targetId };
       const prevPoints = data.points ?? 0;
 
       // Normaliza para 0
@@ -211,7 +231,7 @@ export function ClientPointsAuditModal({
 
       // Registra transação corretiva no extrato de auditoria
       await addDoc(collection(db, 'point_transactions'), {
-        clientId: activeClient.id,
+        clientId: targetId,
         clientName: data.username || data.firstName || 'Cliente',
         points: Math.abs(prevPoints),
         type: 'correction',
@@ -222,7 +242,9 @@ export function ClientPointsAuditModal({
 
       const updated = {
         ...activeClient,
-        ...updatedPayload
+        ...data,
+        ...updatedPayload,
+        id: targetId
       };
       setLiveClient(updated);
       if (onClientUpdated) onClientUpdated(updated);
@@ -255,9 +277,15 @@ export function ClientPointsAuditModal({
 
     setIsSubmittingAdj(true);
     try {
-      const clientRef = doc(db, 'clients', activeClient.id);
+      const targetId = activeClient?.id || targetClientId;
+      if (!targetId) {
+        toast.error('Identificador do cliente não encontrado.');
+        setIsSubmittingAdj(false);
+        return;
+      }
+      const clientRef = doc(db, 'clients', targetId);
       const snap = await getDoc(clientRef);
-      const data = snap.exists() ? snap.data() : activeClient;
+      const data = snap.exists() ? { id: snap.id, ...snap.data() } : { ...activeClient, id: targetId };
 
       const currentPts = data.points ?? 0;
       const currentSeasonal = data.seasonalPoints ?? 0;
@@ -416,7 +444,7 @@ export function ClientPointsAuditModal({
             : (txPoints >= 0 ? 'manual_add' : 'manual_remove'));
 
       await addDoc(collection(db, 'point_transactions'), {
-        clientId: activeClient.id,
+        clientId: targetId,
         clientName: data.username || data.firstName || 'Cliente',
         points: txPoints,
         type: txType,
@@ -432,8 +460,10 @@ export function ClientPointsAuditModal({
       });
 
       const updated = {
+        ...activeClient,
         ...data,
-        ...updateData
+        ...updateData,
+        id: targetId
       };
       setLiveClient(updated);
       setCustomDirectPts(String(newPts));
@@ -442,7 +472,7 @@ export function ClientPointsAuditModal({
       if (onClientUpdated) onClientUpdated(updated);
 
       if (adjAction === 'add' && (isReversionAll || adjScope === 'seasonal_only')) {
-        const bonusRes = await checkAndSyncClientRankBonuses(activeClient.id, updated, thresholds);
+        const bonusRes = await checkAndSyncClientRankBonuses(targetId, updated, thresholds);
         if (bonusRes && bonusRes.awardedBonuses && bonusRes.awardedBonuses.length > 0) {
           const titles = bonusRes.awardedBonuses.map(b => b.title).join(', ');
           toast.success(`🎉 Bônus de patente concedido: ${titles}`, { duration: 5000 });
@@ -479,11 +509,17 @@ export function ClientPointsAuditModal({
       return;
     }
 
+    const targetId = activeClient?.id || targetClientId;
+    if (!targetId) {
+      toast.error('Identificador do cliente não encontrado.');
+      return;
+    }
+
     setIsSubmittingTier(true);
     try {
-      const clientRef = doc(db, 'clients', client.id);
+      const clientRef = doc(db, 'clients', targetId);
       const snap = await getDoc(clientRef);
-      const data = snap.exists() ? snap.data() : client;
+      const data = snap.exists() ? { id: snap.id, ...snap.data() } : { ...activeClient, ...client, id: targetId };
 
       const previousTierLevel = data.seasonHighestTierLevel ?? data.highestTierLevel ?? 1;
       const targetTierName = getTierName(selectedTierLevel);
@@ -514,29 +550,32 @@ export function ClientPointsAuditModal({
 
       // Registra no extrato de auditoria a alteração manual da patente pelo administrador
       await addDoc(collection(db, 'point_transactions'), {
-        clientId: client.id,
-        clientName: client.username || client.firstName || 'Cliente',
+        clientId: targetId,
+        clientName: data.username || data.firstName || 'Cliente',
         points: 0,
         type: 'tier_override',
         description: tierOverrideReason || `Patente alterada manualmente pelo Adm: de ${previousTierName} para ${targetTierName}`,
-        balanceAfter: updatePayload.points ?? data.points ?? client.points ?? 0,
+        balanceAfter: updatePayload.points ?? data.points ?? activeClient.points ?? 0,
         createdAt: new Date().toISOString()
       });
 
       const updated = {
+        ...activeClient,
         ...client,
         ...data,
-        ...updatePayload
+        ...updatePayload,
+        id: targetId
       };
+      setLiveClient(updated);
       if (onClientUpdated) onClientUpdated(updated);
 
-      const bonusRes = await checkAndSyncClientRankBonuses(client.id, updated, thresholds);
+      const bonusRes = await checkAndSyncClientRankBonuses(targetId, updated, thresholds);
       if (bonusRes && bonusRes.awardedBonuses && bonusRes.awardedBonuses.length > 0) {
         const titles = bonusRes.awardedBonuses.map(b => b.title).join(', ');
         toast.success(`🎉 Bônus da nova patente concedido: ${titles}`, { duration: 5000 });
       }
 
-      toast.success(`Patente de ${client.username} alterada para ${targetTierName} com sucesso!`);
+      toast.success(`Patente de ${data.username || 'Cliente'} alterada para ${targetTierName} com sucesso!`);
       setTierOverrideReason('');
       setShowTierForm(false);
     } catch (err) {
@@ -640,7 +679,7 @@ export function ClientPointsAuditModal({
                 )}
               </div>
               <p className="text-xs text-white/50">
-                Cliente: <span className="font-bold text-white">{client.firstName ? `${client.firstName} ${client.lastName || ''}` : client.username}</span> (@{client.username})
+                Cliente: <span className="font-bold text-white">{activeClient?.firstName ? `${activeClient.firstName} ${activeClient.lastName || ''}` : (activeClient?.username || client?.username || 'Cliente')}</span> (@{activeClient?.username || client?.username || 'cliente'})
               </p>
             </div>
           </div>

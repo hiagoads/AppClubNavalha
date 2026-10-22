@@ -17,6 +17,7 @@ import { compressImage } from '../utils/imageUtils';
 import { PastSeason, PastWeek, SeasonPodiumMember, PointTransaction } from '../types';
 import { ClientPointsAuditModal } from './modals/ClientPointsAuditModal';
 import { EditRankBonusModal } from './modals/EditRankBonusModal';
+import { ManageDependentsModal } from './modals/ManageDependentsModal';
 import { GlobalPointsAuditLog } from './gamification/GlobalPointsAuditLog';
 
 export function GamificationManager() {
@@ -35,6 +36,7 @@ export function GamificationManager() {
   const [loadingTransactions, setLoadingTransactions] = useState(true);
   const [auditClient, setAuditClient] = useState<any | null>(null);
   const [isAuditingOpen, setIsAuditingOpen] = useState(false);
+  const [dependentsClient, setDependentsClient] = useState<any | null>(null);
   const [fixingClientId, setFixingClientId] = useState<string | null>(null);
 
   // Add Points State
@@ -53,6 +55,7 @@ export function GamificationManager() {
 
   // Season State
   const [seasonStart, setSeasonStart] = useState('');
+  const [seasonEnd, setSeasonEnd] = useState('');
   const [seasonDuration, setSeasonDuration] = useState('3');
   const [currentSeasonNumber, setCurrentSeasonNumber] = useState<number>(1);
   
@@ -77,11 +80,39 @@ export function GamificationManager() {
   // Auto-sync hook para verificação periódica a cada 1 minuto e em tempo real
   const { isSyncing: isAutoSyncing, triggerManualSync } = useGamificationAutoSync({ enabled: true, intervalMs: 60000 });
 
-  // Lista dos competidores ativos na semana corrente (atenta à data dos créditos/débitos)
+  // Lista dos competidores ativos na semana corrente (inclui titulares e subcontas de dependentes)
   const activeWeeklyClients = React.useMemo(() => {
-    const list = clients.filter((c: any) => {
+    const list: any[] = [];
+    clients.forEach((c: any) => {
       const weekly = Number(c.weeklyPoints || 0);
-      return weekly > 0;
+      if (weekly > 0) {
+        list.push({ ...c, isDependent: false });
+      }
+      if (Array.isArray(c.dependents)) {
+        c.dependents.forEach((dep: any) => {
+          const depWeekly = Number(dep.weeklyPoints || 0);
+          if (depWeekly > 0) {
+            list.push({
+              id: `${c.id}_dep_${dep.id}`,
+              isDependent: true,
+              dependentId: dep.id,
+              parentId: c.id,
+              parentName: c.username || c.firstName || 'Responsável',
+              username: `${dep.name} (Dep. de ${c.username || c.firstName || 'Responsável'})`,
+              displayName: dep.name,
+              avatarUrl: dep.avatarUrl || c.avatarUrl || '',
+              weeklyPoints: depWeekly,
+              points: dep.points || depWeekly,
+              seasonalPoints: dep.points || depWeekly,
+              lifetimePoints: dep.points || depWeekly,
+              level: c.level || 1,
+              highestTierLevel: c.highestTierLevel || 1,
+              seasonHighestTierLevel: c.seasonHighestTierLevel || c.highestTierLevel || 1,
+              lastPointsUpdate: dep.lastPointsUpdate || c.lastPointsUpdate
+            });
+          }
+        });
+      }
     });
 
     return [...list].sort(compareClientsForRanking);
@@ -150,6 +181,7 @@ export function GamificationManager() {
         const data = docSnap.data();
         setDefaultAvatarUrl(data.defaultAvatarUrl || '');
         setSeasonStart(data.seasonStartDate || '');
+        setSeasonEnd(data.seasonEndDate || '');
         setSeasonDuration(data.seasonDurationMonths?.toString() || '3');
         if (data.currentSeasonNumber) setCurrentSeasonNumber(Number(data.currentSeasonNumber));
         if (data.currentWeekNumber) setCurrentWeekNumber(Number(data.currentWeekNumber));
@@ -320,7 +352,8 @@ export function GamificationManager() {
 
       await setDoc(doc(db, 'settings', 'gamification'), {
         seasonStartDate: seasonStart,
-        seasonDurationMonths: parseInt(seasonDuration),
+        seasonEndDate: seasonEnd || null,
+        seasonDurationMonths: parseInt(seasonDuration) || 3,
         currentSeasonNumber: Number(currentSeasonNumber),
         tierThresholds,
         rankBonuses
@@ -420,15 +453,48 @@ export function GamificationManager() {
       const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const createdAt = now.toISOString();
 
-      // 1. Capturar os ganhadores do pódio e ranking da semana ANTES de zerar a pontuação
-      const activeCompetitors = sortedClients.filter((c: any) => (c.weeklyPoints || 0) > 0);
-      if (activeCompetitors.length === 0) {
-        toast.error('Nenhum cliente possui pontos acumulados nesta semana. Clique em "Recalcular Pontos da Semana" para atualizar o ranking antes de encerrar.');
+      // 1. Capturar todos os competidores da semana (titulares e dependentes)
+      const allCompetitors: any[] = [];
+      allClients.forEach((c: any) => {
+        const weekly = Number(c.weeklyPoints || 0);
+        if (weekly > 0) {
+          allCompetitors.push({ ...c, isDependent: false });
+        }
+        if (Array.isArray(c.dependents)) {
+          c.dependents.forEach((dep: any) => {
+            const depWeekly = Number(dep.weeklyPoints || 0);
+            if (depWeekly > 0) {
+              allCompetitors.push({
+                id: `${c.id}_dep_${dep.id}`,
+                isDependent: true,
+                dependentId: dep.id,
+                parentId: c.id,
+                parentName: c.username || c.firstName || 'Responsável',
+                username: `${dep.name} (${c.username || c.firstName || 'Responsável'})`,
+                dependentName: dep.name,
+                avatarUrl: dep.avatarUrl || c.avatarUrl || '',
+                weeklyPoints: depWeekly,
+                points: dep.points || depWeekly,
+                seasonalPoints: dep.points || depWeekly,
+                lifetimePoints: dep.points || depWeekly,
+                level: c.level || 1,
+                highestTierLevel: c.highestTierLevel || 1,
+                lastPointsUpdate: dep.lastPointsUpdate || c.lastPointsUpdate
+              });
+            }
+          });
+        }
+      });
+
+      allCompetitors.sort(compareClientsForRanking);
+
+      if (allCompetitors.length === 0) {
+        toast.error('Nenhum cliente ou dependente possui pontos acumulados nesta semana. Clique em "Recalcular Pontos da Semana" para atualizar o ranking antes de encerrar.');
         setIsResetting(false);
         return;
       }
-      const topCompetitors = activeCompetitors;
-      const topThreeClients = topCompetitors.slice(0, 3);
+
+      const topThreeClients = allCompetitors.slice(0, 3);
 
       const podiumMembers: SeasonPodiumMember[] = topThreeClients.map((c, idx) => {
         const tier = getClientTier(c, tierThresholds);
@@ -440,7 +506,7 @@ export function GamificationManager() {
 
         return {
           position,
-          username: c.username || c.firstName || `Ganhador ${position}`,
+          username: c.isDependent ? `${c.dependentName} (Filho de ${c.parentName})` : (c.username || c.firstName || `Ganhador ${position}`),
           avatarUrl: c.avatarUrl || '',
           points: Number(c.weeklyPoints || 0),
           reward: rewardDesc,
@@ -448,40 +514,34 @@ export function GamificationManager() {
         };
       });
 
-      const weeklyRankingSnapshot: SeasonPodiumMember[] = topCompetitors.slice(0, 25).map((c, idx) => {
+      const weeklyRankingSnapshot: SeasonPodiumMember[] = allCompetitors.slice(0, 25).map((c, idx) => {
         const tier = getClientTier(c, tierThresholds);
         return {
           position: idx + 1,
-          username: c.username || c.firstName || `Competidor ${idx + 1}`,
+          username: c.isDependent ? `${c.dependentName} (Filho de ${c.parentName})` : (c.username || c.firstName || `Competidor ${idx + 1}`),
           avatarUrl: c.avatarUrl || '',
           points: Number(c.weeklyPoints || 0),
           tierName: tier.name
         };
       });
 
-      const totalWeeklyPts = activeCompetitors.reduce((acc, c) => acc + (c.weeklyPoints || 0), 0);
+      const totalWeeklyPts = allCompetitors.reduce((acc, c) => acc + (c.weeklyPoints || 0), 0);
 
-      for (let i = 0; i < sortedClients.length; i++) {
-        const c = sortedClients[i];
-        const rank = i + 1;
+      for (let i = 0; i < allClients.length; i++) {
+        const c = allClients[i];
         
         let clientBonuses: any[] = c.bonuses || [];
 
         // 1. Limpar bônus semanais anteriores expirados ou não resgatados da semana que passou
-        // Bônus do tipo 'weekly_podium' ou com título contendo 'da Semana' são removidos no novo fechamento semanal
         clientBonuses = clientBonuses.filter((b: any) => {
           const isWeeklyBonus = b.category === 'weekly_podium' || 
             (b.title && (b.title.includes('da Semana') || b.title.includes('Semanal')));
           
-          // Se não é bônus semanal (ex: bônus permanente de patente/nível), preserva intacto
           if (!isWeeklyBonus) return true;
-
-          // Se já expirou ou se é da semana anterior, não permanece
           return false;
         });
 
         const addBonusWithoutStacking = (bonusDef: any) => {
-          // Remove qualquer outro ativo do mesmo tipo para garantir que prevaleça o novo
           clientBonuses = clientBonuses.filter((b: any) => {
             if (b.type === bonusDef.type) {
               if (b.type === 'vip_hours') return (b.usedHours || 0) >= (b.totalHours || 1);
@@ -489,13 +549,13 @@ export function GamificationManager() {
             }
             return true;
           });
-          // Adiciona o novo bônus semanal com a data de validade de 1 semana
           clientBonuses.push(bonusDef);
         };
 
-        const hasWeeklyPoints = (c.weeklyPoints || 0) > 0;
-        
-        if (hasWeeklyPoints) {
+        // Verifica se o titular ficou no Top 3
+        const titularCompIdx = allCompetitors.findIndex(comp => !comp.isDependent && comp.id === c.id);
+        if (titularCompIdx >= 0 && titularCompIdx < 3) {
+          const rank = titularCompIdx + 1;
           if (rank === 1) {
             addBonusWithoutStacking({ 
               id: crypto.randomUUID(), 
@@ -539,8 +599,66 @@ export function GamificationManager() {
           }
         }
 
+        // Verifica se algum dependente deste titular ficou no Top 3
+        if (Array.isArray(c.dependents)) {
+          c.dependents.forEach((dep: any) => {
+            const depCompIdx = allCompetitors.findIndex(comp => comp.isDependent && comp.parentId === c.id && comp.dependentId === dep.id);
+            if (depCompIdx >= 0 && depCompIdx < 3) {
+              const rank = depCompIdx + 1;
+              if (rank === 1) {
+                addBonusWithoutStacking({ 
+                  id: crypto.randomUUID(), 
+                  title: `Acesso Livre VIP (1º da Semana - Filho ${dep.name})`, 
+                  type: 'unlimited_vip', 
+                  category: 'weekly_podium',
+                  isRedeemed: false, 
+                  createdAt, 
+                  expiresAt 
+                });
+              } else if (rank === 2) {
+                addBonusWithoutStacking({ 
+                  id: crypto.randomUUID(), 
+                  title: `1 Hora VIP (2º da Semana - Filho ${dep.name})`, 
+                  type: 'vip_hours', 
+                  category: 'weekly_podium',
+                  totalHours: 1, 
+                  usedHours: 0, 
+                  createdAt, 
+                  expiresAt 
+                });
+                addBonusWithoutStacking({ 
+                  id: crypto.randomUUID(), 
+                  title: `Picolé Grátis (2º da Semana - Filho ${dep.name})`, 
+                  type: 'popsicle', 
+                  category: 'weekly_podium',
+                  isRedeemed: false, 
+                  createdAt, 
+                  expiresAt 
+                });
+              } else if (rank === 3) {
+                addBonusWithoutStacking({ 
+                  id: crypto.randomUUID(), 
+                  title: `Picolé Grátis (3º da Semana - Filho ${dep.name})`, 
+                  type: 'popsicle', 
+                  category: 'weekly_podium',
+                  isRedeemed: false, 
+                  createdAt, 
+                  expiresAt 
+                });
+              }
+            }
+          });
+        }
+
+        // Zera pontuação semanal do titular e de todos os seus dependentes
+        const updatedDependents = (c.dependents || []).map((dep: any) => ({
+          ...dep,
+          weeklyPoints: 0
+        }));
+
         await updateDoc(doc(db, 'clients', c.id), {
            weeklyPoints: 0,
+           dependents: updatedDependents,
            bonuses: clientBonuses
         });
       }
@@ -560,7 +678,7 @@ export function GamificationManager() {
         title: `Semana ${currentWeekNumber || 1}`,
         endDate: now.toISOString().split('T')[0],
         closedAt: createdAt,
-        totalParticipants: activeCompetitors.length,
+        totalParticipants: allCompetitors.length,
         totalWeeklyPoints: totalWeeklyPts,
         topPodium: podiumMembers,
         ranking: weeklyRankingSnapshot,
@@ -694,11 +812,13 @@ export function GamificationManager() {
       const nextSeason = currentSeasonNumber + 1;
       await setDoc(doc(db, 'settings', 'gamification'), {
         currentSeasonNumber: nextSeason,
-        seasonStartDate: todayStr
+        seasonStartDate: todayStr,
+        seasonEndDate: null
       }, { merge: true });
 
       setCurrentSeasonNumber(nextSeason);
       setSeasonStart(todayStr);
+      setSeasonEnd('');
 
       toast.success(`Temporada ${currentSeasonNumber} encerrada e arquivada! Nova Temporada #${nextSeason} iniciada.`);
     } catch (e: any) {
@@ -1201,6 +1321,8 @@ export function GamificationManager() {
     };
   }, [selectedClient, pointScope, pointAction, pointsToAdd, customDirectPts, customDirectSeasonal, customDirectWeekly, tierThresholds]);
 
+  const currentSeasonDates = calculateSeasonDates(seasonStart, parseInt(seasonDuration) || 3, seasonEnd);
+
   if (loading) {
     return <div className="p-8 text-center text-white/50 animate-pulse">Carregando dados...</div>;
   }
@@ -1441,7 +1563,7 @@ export function GamificationManager() {
 
         {/* Resumo da Temporada Atual */}
         {(() => {
-          const dates = calculateSeasonDates(seasonStart, parseInt(seasonDuration) || 3);
+          const dates = currentSeasonDates;
           const activeCount = clients.filter(c => (c.seasonalPoints || c.points || 0) > 0).length;
           const totalXP = clients.reduce((acc, c) => acc + (c.seasonalPoints || c.points || 0), 0);
 
@@ -1455,15 +1577,15 @@ export function GamificationManager() {
                 </span>
               </div>
               <div>
-                <span className="text-[10px] uppercase font-bold text-white/40 block">Término Previsto</span>
-                <span className="font-semibold text-white/90 flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] uppercase font-bold text-gold block">Término Definido</span>
+                <span className="font-bold text-gold flex items-center gap-1.5 mt-1">
                   <Calendar className="w-3.5 h-3.5 text-gold" />
                   {dates.endDateFormatted}
                 </span>
               </div>
               <div>
                 <span className="text-[10px] uppercase font-bold text-white/40 block">Tempo Restante</span>
-                <span className="font-bold text-gold flex items-center gap-1.5 mt-1">
+                <span className="font-bold text-white flex items-center gap-1.5 mt-1">
                   <Clock className="w-3.5 h-3.5 text-gold" />
                   {dates.daysRemaining} dias
                 </span>
@@ -1480,7 +1602,7 @@ export function GamificationManager() {
         })()}
 
         {/* Form: Configuração dos Parâmetros */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 items-end mb-6">
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase text-white/50 tracking-wider block">
               Nº Temporada
@@ -1496,26 +1618,67 @@ export function GamificationManager() {
 
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase text-white/50 tracking-wider block">
-              Início da Temporada
+              Início (Dia/Mês/Ano)
             </label>
             <input 
               type="date" 
               value={seasonStart}
-              onChange={(e) => setSeasonStart(e.target.value)}
+              onChange={(e) => {
+                const newStart = e.target.value;
+                setSeasonStart(newStart);
+                if (!seasonEnd && newStart) {
+                  const parts = newStart.split('-');
+                  if (parts.length === 3) {
+                    const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1 + (parseInt(seasonDuration) || 3), parseInt(parts[2], 10));
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    setSeasonEnd(`${y}-${m}-${day}`);
+                  }
+                }
+              }}
               className="w-full bg-black/40 border border-white/10 rounded-xl py-2.5 px-3 text-white focus:outline-none focus:border-gold/50 font-medium [color-scheme:dark]"
             />
           </div>
 
           <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase text-gold tracking-wider block">
+                Término Exato (Dia/Mês/Ano)
+              </label>
+            </div>
+            <input 
+              type="date" 
+              value={seasonEnd || currentSeasonDates.endDateRaw}
+              onChange={(e) => {
+                setSeasonEnd(e.target.value);
+              }}
+              className="w-full bg-black/40 border border-gold/40 rounded-xl py-2.5 px-3 text-gold focus:outline-none focus:border-gold font-bold [color-scheme:dark]" 
+            />
+          </div>
+
+          <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase text-white/50 tracking-wider block">
-              Duração (Meses)
+              Ou Duração (Meses)
             </label>
             <input 
               type="number" 
               min="1"
-              max="12"
+              max="24"
               value={seasonDuration}
-              onChange={(e) => setSeasonDuration(e.target.value)}
+              onChange={(e) => {
+                const dur = e.target.value;
+                setSeasonDuration(dur);
+                const sDate = seasonStart || new Date().toISOString().split('T')[0];
+                const parts = sDate.split('-');
+                if (parts.length === 3) {
+                  const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1 + (parseInt(dur) || 3), parseInt(parts[2], 10));
+                  const y = d.getFullYear();
+                  const m = String(d.getMonth() + 1).padStart(2, '0');
+                  const day = String(d.getDate()).padStart(2, '0');
+                  setSeasonEnd(`${y}-${m}-${day}`);
+                }
+              }}
               className="w-full bg-black/40 border border-white/10 rounded-xl py-2.5 px-3 text-white focus:outline-none focus:border-gold/50 font-medium" 
             />
           </div>
@@ -1524,10 +1687,10 @@ export function GamificationManager() {
             <button 
               onClick={handleSaveSeason}
               disabled={isSavingSeason}
-              className="w-full py-2.5 px-4 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2 border border-white/10 hover:border-white/20"
+              className="w-full py-2.5 px-4 bg-gold hover:bg-gold-light text-carbon rounded-xl font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-gold/20"
             >
-              <Save className="w-4 h-4 text-gold" />
-              <span>{isSavingSeason ? 'Salvando...' : 'Salvar Configuração'}</span>
+              <Save className="w-4 h-4 text-carbon" />
+              <span>{isSavingSeason ? 'Salvando...' : 'Salvar'}</span>
             </button>
           </div>
         </div>
@@ -2437,6 +2600,36 @@ export function GamificationManager() {
                   </div>
                 </div>
 
+                {/* Dependentes deste cliente */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-gold/10 border border-gold/20 flex items-center justify-center text-gold shrink-0">
+                      <Users className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span>Dependentes Vinculados</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-gold/15 text-gold border border-gold/30 font-mono">
+                          {selectedClient.dependents?.length || 0}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-white/50">
+                        {selectedClient.dependents && selectedClient.dependents.length > 0
+                          ? selectedClient.dependents.map((d: any) => `${d.name} (${d.points || 0} pts)`).join(', ')
+                          : 'Nenhum dependente/filho vinculado a este cliente'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDependentsClient(selectedClient)}
+                    className="px-3 py-1.5 text-xs font-bold text-gold bg-gold/10 hover:bg-gold/20 border border-gold/30 rounded-lg transition-colors flex items-center justify-center gap-1.5 shrink-0 self-start sm:self-auto"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>Gerenciar Dependentes</span>
+                  </button>
+                </div>
+
                 {/* Seletor de Escopo / Tipo de Ajuste */}
                 <div className="space-y-1.5 pt-1">
                   <label className="text-[10px] uppercase font-bold text-white/50 block">
@@ -2855,6 +3048,15 @@ export function GamificationManager() {
                       <span>Patente</span>
                     </button>
 
+                    <button
+                      onClick={() => setDependentsClient(client)}
+                      className="text-xs font-bold text-cyan-300 hover:text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+                      title="Gerenciar dependentes deste cliente"
+                    >
+                      <Users className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Dependentes ({client.dependents?.length || 0})</span>
+                    </button>
+
                     {(client.points ?? 0) < 0 && (
                       <button
                         onClick={() => handleFixNegativeBalance(client)}
@@ -2899,6 +3101,21 @@ export function GamificationManager() {
       client={auditClient}
       onClientUpdated={(updated) => {
         setClients(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+      }}
+    />
+  )}
+
+  {/* Modal de Gestão de Dependentes do Cliente */}
+  {dependentsClient && (
+    <ManageDependentsModal
+      isOpen={!!dependentsClient}
+      onClose={() => setDependentsClient(null)}
+      client={dependentsClient}
+      onClientUpdated={(updated) => {
+        setClients(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+        if (selectedClient?.id === updated.id) {
+          setSelectedClient(updated);
+        }
       }}
     />
   )}

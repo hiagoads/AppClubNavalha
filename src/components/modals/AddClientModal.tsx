@@ -28,6 +28,8 @@ export interface NewClientData {
   scheduledTime: string;
   scheduledDate: string;
   clientId?: string;
+  dependentId?: string;
+  dependentName?: string;
 }
 
 interface AddClientModalProps {
@@ -158,7 +160,9 @@ export function AddClientModal({
     setSelectedClient(null);
     setNewClientData(prev => ({
       ...prev,
-      clientId: ''
+      clientId: '',
+      dependentId: undefined,
+      dependentName: undefined
     }));
   };
 
@@ -366,6 +370,72 @@ export function AddClientModal({
               >
                 Vincular Conta
               </button>
+            </div>
+          )}
+
+          {/* Seleção de Dependente se o cliente vinculado tiver dependentes cadastrados */}
+          {selectedClient && selectedClient.dependents && selectedClient.dependents.length > 0 && (
+            <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+              <label className="text-[10px] uppercase tracking-widest text-gold font-bold block">
+                Atendimento para quem?
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fullName = selectedClient.firstName 
+                      ? `${selectedClient.firstName} ${selectedClient.lastName || ''}`.trim() 
+                      : selectedClient.username;
+                    setNewClientData(prev => ({
+                      ...prev,
+                      name: fullName,
+                      dependentId: undefined,
+                      dependentName: undefined
+                    }));
+                  }}
+                  className={`flex-1 min-w-[120px] py-1.5 px-3 rounded-lg border text-xs font-bold transition-all text-left flex items-center justify-between ${
+                    !newClientData.dependentId
+                      ? 'bg-gold/20 border-gold/60 text-gold shadow-sm shadow-gold/10'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:text-white'
+                  }`}
+                >
+                  <span className="truncate">Titular (Responsável)</span>
+                  {!newClientData.dependentId && <Check className="w-3.5 h-3.5 text-gold shrink-0 ml-1" />}
+                </button>
+                {selectedClient.dependents.map(dep => {
+                  const isSelected = newClientData.dependentId === dep.id;
+                  return (
+                    <button
+                      key={dep.id}
+                      type="button"
+                      onClick={() => {
+                        setNewClientData(prev => ({
+                          ...prev,
+                          name: dep.name,
+                          dependentId: dep.id,
+                          dependentName: dep.name
+                        }));
+                      }}
+                      className={`flex-1 min-w-[120px] py-1.5 px-3 rounded-lg border text-xs font-bold transition-all text-left flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-purple-500/20 border-purple-500/60 text-purple-300 shadow-sm shadow-purple-500/10'
+                          : 'bg-white/5 border-white/10 text-white/50 hover:text-white'
+                      }`}
+                    >
+                      <div className="truncate pr-1">
+                        <span className="block truncate">{dep.name}</span>
+                        <span className="text-[9px] font-mono opacity-60 font-normal">{dep.points || 0} pts</span>
+                      </div>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-purple-400 shrink-0 ml-1" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {newClientData.dependentId && (
+                <p className="text-[10px] text-purple-300/80 pt-0.5">
+                  Atendimento marcado para o dependente. Os pontos poderão ser transferidos a ele na finalização.
+                </p>
+              )}
             </div>
           )}
 

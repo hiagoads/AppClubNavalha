@@ -1,14 +1,16 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { X, User, Phone, CheckCircle2 } from 'lucide-react';
-import { Service } from '../../types';
+import { Service, ClientDependent } from '../../types';
 import { formatPhone, parsePhone, parsePrice } from '../../utils';
 
-interface FormData {
+export interface FormData {
   name: string;
   whatsapp: string;
   serviceIds: string[];
   scheduledTime: string;
+  dependentId?: string;
+  dependentName?: string;
 }
 
 interface JoinQueueModalProps {
@@ -21,6 +23,8 @@ interface JoinQueueModalProps {
   services: Service[];
   onSubmit: (e: React.FormEvent) => void;
   schedulingFee: number;
+  dependents?: ClientDependent[];
+  parentName?: string;
 }
 
 export function JoinQueueModal({
@@ -32,7 +36,9 @@ export function JoinQueueModal({
   setFormData,
   services,
   onSubmit,
-  schedulingFee
+  schedulingFee,
+  dependents,
+  parentName
 }: JoinQueueModalProps) {
   if (!isOpen) return null;
 
@@ -81,8 +87,72 @@ export function JoinQueueModal({
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
+          {dependents && dependents.length > 0 && (
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-2">
+              <label className="block text-[10px] uppercase tracking-widest text-gold font-bold">
+                Quem vai cortar?
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormData(prev => ({
+                      ...prev,
+                      name: parentName || '',
+                      dependentId: undefined,
+                      dependentName: undefined
+                    }));
+                  }}
+                  className={`flex-1 min-w-[120px] py-2 px-3 rounded-xl border text-xs font-bold transition-all text-left flex items-center justify-between ${
+                    !formData.dependentId
+                      ? 'bg-gold/20 border-gold/60 text-gold shadow-sm shadow-gold/10'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:text-white'
+                  }`}
+                >
+                  <span className="truncate">Para mim {parentName ? `(${parentName})` : ''}</span>
+                  {!formData.dependentId && <CheckCircle2 className="w-3.5 h-3.5 text-gold shrink-0 ml-1.5" />}
+                </button>
+                {dependents.map(dep => {
+                  const isSelected = formData.dependentId === dep.id;
+                  return (
+                    <button
+                      key={dep.id}
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          name: dep.name,
+                          dependentId: dep.id,
+                          dependentName: dep.name
+                        }));
+                      }}
+                      className={`flex-1 min-w-[120px] py-2 px-3 rounded-xl border text-xs font-bold transition-all text-left flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-purple-500/20 border-purple-500/60 text-purple-300 shadow-sm shadow-purple-500/10'
+                          : 'bg-white/5 border-white/10 text-white/50 hover:text-white'
+                      }`}
+                    >
+                      <div className="truncate pr-1">
+                        <span className="block truncate">{dep.name}</span>
+                        <span className="text-[9px] font-mono opacity-60 font-normal">{dep.points || 0} pts</span>
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 shrink-0 ml-1.5" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {formData.dependentId && (
+                <p className="text-[10px] text-purple-300/80 pt-0.5">
+                  Corte para dependente. O WhatsApp abaixo é usado para avisos ao responsável.
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
-            <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">Nome Completo</label>
+            <label className="block text-[10px] uppercase tracking-widest text-white/50 mb-1.5 font-bold">
+              {formData.dependentId ? 'Nome do Dependente' : 'Nome Completo'}
+            </label>
             <div className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
               <input 

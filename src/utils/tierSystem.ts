@@ -175,7 +175,7 @@ export const getClientTier = (
   // Se houver override manual ativo definido pelo administrador
   if (client.manualTierOverride && typeof client.manualTierLevel === 'number' && client.manualTierLevel >= 1 && client.manualTierLevel <= 8) {
     const forcedTier = client.manualTierLevel;
-    const currentPoints = Math.max(0, client.seasonalPoints ?? client.points ?? 0);
+    const currentPoints = Math.max(0, client.seasonalPoints ?? client.seasonHighestPoints ?? 0);
     const currentThreshold = effectiveThresholds[forcedTier - 1] || 0;
     let nextThreshold = null;
     let progressPercentage = 100;
@@ -216,12 +216,13 @@ export const getClientTier = (
   }
   
   // Pontos de pico da temporada atual (não são reduzidos por resgates)
+  // A patente é estritamente conquistada com base nos pontos da temporada (seasonalPoints / seasonHighestPoints)
+  // e NUNCA pelo saldo gastável (points), permitindo conceder saldo para resgates sem subir a patente indevidamente.
   const peakSeasonalPoints = Math.max(
     0,
     client.seasonHighestPoints ?? 0,
     client.highestSeasonalPoints ?? 0,
-    client.seasonalPoints ?? 0,
-    client.points ?? 0
+    client.seasonalPoints ?? 0
   );
 
   // A patente é estritamente conquistada com base nos pontos de pico da temporada atual

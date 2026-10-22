@@ -97,7 +97,11 @@ export default function ClientPanel() {
 
   useEffect(() => {
     if (clientProfile) {
-      setFormData(prev => ({ ...prev, name: clientProfile.username, whatsapp: parsePhone(clientProfile.whatsapp || '') }));
+      setFormData(prev => ({
+        ...prev,
+        name: prev.dependentId ? prev.name : clientProfile.username,
+        whatsapp: parsePhone(clientProfile.whatsapp || '')
+      }));
     }
   }, [clientProfile]);
 
@@ -108,6 +112,8 @@ export default function ClientPanel() {
     barberId: 'any',
     scheduledTime: '',
     scheduledDate: new Date().toISOString().split('T')[0],
+    dependentId: undefined as string | undefined,
+    dependentName: undefined as string | undefined
   });
 
   const getAvailableSlots = () => {
@@ -262,6 +268,10 @@ export default function ClientPanel() {
         status: BookingStatus.WAITING,
         createdAt: serverTimestamp(),
         ...(clientProfile?.id ? { clientId: clientProfile.id } : {}),
+        ...(formData.dependentId ? { 
+          dependentId: formData.dependentId, 
+          dependentName: formData.dependentName || formData.name 
+        } : {}),
         ...(isScheduled && { scheduledTime: formData.scheduledTime, scheduledDate: formData.scheduledDate }),
         ...(subJson && { pushSubscription: subJson })
       });
@@ -278,11 +288,19 @@ export default function ClientPanel() {
           time: formData.scheduledTime,
         });
       } else {
-        toast.success('Você entrou na fila!');
+        toast.success(formData.dependentName ? `Corte de ${formData.dependentName} adicionado à fila!` : 'Você entrou na fila!');
       }
 
       setShowJoinForm(false);
-      setFormData(prev => ({...prev, name: '', whatsapp: '', scheduledTime: '', scheduledDate: new Date().toISOString().split('T')[0]}));
+      setFormData(prev => ({
+        ...prev, 
+        name: clientProfile?.username || '', 
+        whatsapp: parsePhone(clientProfile?.whatsapp || ''), 
+        scheduledTime: '', 
+        scheduledDate: new Date().toISOString().split('T')[0],
+        dependentId: undefined,
+        dependentName: undefined
+      }));
     } catch (err) {
       toast.error('Erro ao agendar');
     }
@@ -793,7 +811,14 @@ export default function ClientPanel() {
                   <div className="text-4xl font-display font-bold text-gold">#{myPosition > 0 ? myPosition : '0'}</div>
                </div>
                <div className="mb-4">
-                  <h3 className="text-xl font-bold">{myBooking.clientName}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xl font-bold">{myBooking.clientName}</h3>
+                    {myBooking.dependentName && (
+                      <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-bold">
+                        Dependente / Filho
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2 mt-1 mb-1">
                     <p className="text-gold text-sm">{myBooking.serviceId}</p>
                     {myBooking.status !== BookingStatus.IN_SERVICE && (
@@ -1023,6 +1048,8 @@ export default function ClientPanel() {
           services={services}
           onSubmit={withProcessing(handleSubmit)}
           schedulingFee={schedulingFee}
+          dependents={clientProfile?.dependents}
+          parentName={clientProfile?.username}
         />
       </AnimatePresence>
 

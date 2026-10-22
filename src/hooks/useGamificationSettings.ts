@@ -11,12 +11,16 @@ export interface RewardItem {
   icon?: string;
 }
 
-export function calculateSeasonDates(startDateStr?: string, durationMonths: number = 3) {
+export function calculateSeasonDates(
+  startDateStr?: string, 
+  durationMonths: number = 3,
+  exactEndDateStr?: string
+) {
   let start: Date;
   if (startDateStr) {
     const parts = startDateStr.split('-');
     if (parts.length === 3) {
-      start = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      start = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     } else {
       start = new Date(startDateStr);
     }
@@ -30,8 +34,22 @@ export function calculateSeasonDates(startDateStr?: string, durationMonths: numb
     start = new Date(now.getFullYear(), now.getMonth(), 1);
   }
 
-  const end = new Date(start);
-  end.setMonth(end.getMonth() + durationMonths);
+  let end: Date;
+  if (exactEndDateStr) {
+    const endParts = exactEndDateStr.split('-');
+    if (endParts.length === 3) {
+      end = new Date(parseInt(endParts[0], 10), parseInt(endParts[1], 10) - 1, parseInt(endParts[2], 10));
+    } else {
+      end = new Date(exactEndDateStr);
+    }
+    if (isNaN(end.getTime())) {
+      end = new Date(start);
+      end.setMonth(end.getMonth() + durationMonths);
+    }
+  } else {
+    end = new Date(start);
+    end.setMonth(end.getMonth() + durationMonths);
+  }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -43,11 +61,18 @@ export function calculateSeasonDates(startDateStr?: string, durationMonths: numb
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
   };
 
+  const toIsoDate = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   return {
     startDateFormatted: formatDate(start),
     endDateFormatted: formatDate(end),
-    startDateRaw: start.toISOString().split('T')[0],
-    endDateRaw: end.toISOString().split('T')[0],
+    startDateRaw: toIsoDate(start),
+    endDateRaw: toIsoDate(end),
     daysRemaining,
     isExpired: diffTime <= 0
   };
@@ -68,6 +93,7 @@ export function useGamificationSettings() {
   const [rewards, setRewards] = useState<RewardItem[]>(DEFAULT_REWARDS);
   const [rankBonuses, setRankBonuses] = useState<RankBonusDefinition[]>(getActiveRankBonuses() || DEFAULT_RANK_BONUSES);
   const [seasonStartDate, setSeasonStartDate] = useState<string>('');
+  const [seasonEndDate, setSeasonEndDate] = useState<string>('');
   const [seasonDurationMonths, setSeasonDurationMonths] = useState<number>(3);
   const [currentSeasonNumber, setCurrentSeasonNumber] = useState<number>(1);
   const [currentWeekNumber, setCurrentWeekNumber] = useState<number>(1);
@@ -93,6 +119,9 @@ export function useGamificationSettings() {
         }
         if (data.seasonStartDate) {
           setSeasonStartDate(data.seasonStartDate);
+        }
+        if (data.seasonEndDate !== undefined) {
+          setSeasonEndDate(data.seasonEndDate || '');
         }
         if (data.seasonDurationMonths) {
           setSeasonDurationMonths(Number(data.seasonDurationMonths));
@@ -122,7 +151,7 @@ export function useGamificationSettings() {
     return () => unsub();
   }, []);
 
-  const dates = calculateSeasonDates(seasonStartDate, seasonDurationMonths);
+  const dates = calculateSeasonDates(seasonStartDate, seasonDurationMonths, seasonEndDate);
 
   return { 
     thresholds,
@@ -130,6 +159,7 @@ export function useGamificationSettings() {
     rewards, 
     rankBonuses,
     seasonStartDate, 
+    seasonEndDate,
     seasonDurationMonths, 
     currentSeasonNumber,
     currentWeekNumber,

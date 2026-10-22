@@ -254,6 +254,7 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
 
         let calculatedWeeklyPoints = 0;
         let hasActivityThisWeek = false;
+        const depWeeklyMap: Record<string, number> = {};
 
         // 1. Processa point_transactions da semana atual
         for (const tx of clientTxs) {
@@ -281,34 +282,40 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
           if (txTime >= weekStartMs) {
             hasActivityThisWeek = true;
             const pts = Number(tx.points || 0);
+            const isDepTx = !!tx.dependentId;
+            let change = 0;
 
             // Se a transação gravou weeklyPointsChange explícito, respeita a alteração da semana
             if (typeof tx.weeklyPointsChange === 'number') {
-              calculatedWeeklyPoints += tx.weeklyPointsChange;
+              change = tx.weeklyPointsChange;
             }
             // Se foi marcado explicitamente como ajuste exclusivo do ranking semanal
             else if (tx.scope === 'weekly_only') {
-              calculatedWeeklyPoints += pts;
+              change = pts;
             }
             // Se foi apenas saldo gastável ('balance_only') ou apenas temporada ('seasonal_only'), NÃO altera o ranking da semana
             else if (tx.scope === 'balance_only' || tx.scope === 'seasonal_only') {
-              // não conta no semanal
+              change = 0;
             }
             // Correções ou ajustes diretos
             else if (tx.scope === 'custom_direct' || tx.type === 'correction') {
-              if (pts !== 0) {
-                calculatedWeeklyPoints += pts;
-              }
+              change = pts;
             }
             // Adições e ganhos gerais
             else if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
-              calculatedWeeklyPoints += Math.max(0, pts);
+              change = Math.max(0, pts);
             } 
             // Deduções e estornos gerais
             else if (tx.type === 'manual_remove' || tx.type === 'adjusted' || tx.type === 'reverted' || pts < 0) {
               if (tx.type !== 'redeem') {
-                calculatedWeeklyPoints += pts; // pts é negativo, reduz pontuação semanal
+                change = pts;
               }
+            }
+
+            if (isDepTx) {
+              depWeeklyMap[tx.dependentId!] = (depWeeklyMap[tx.dependentId!] || 0) + change;
+            } else {
+              calculatedWeeklyPoints += change;
             }
           }
         }
@@ -319,12 +326,35 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
             const bTime = parseDateToMs(b.paidAt) || parseDateToMs(b.estimatedEndTime) || parseDateToMs(b.updatedAt) || parseDateToMs(b.createdAt);
             if (bTime >= weekStartMs) {
               hasActivityThisWeek = true;
-              calculatedWeeklyPoints += Math.max(0, b.pointsAwarded || 0);
+              const bPts = Math.max(0, b.pointsAwarded || 0);
+              const depId = b.awardedToDependentId || b.dependentId;
+              if (depId) {
+                depWeeklyMap[depId] = (depWeeklyMap[depId] || 0) + bPts;
+              } else {
+                calculatedWeeklyPoints += bPts;
+              }
             }
           }
         }
 
         calculatedWeeklyPoints = Math.max(0, calculatedWeeklyPoints);
+
+        // Atualização de dependentes caso necessário
+        if (Array.isArray(client.dependents) && client.dependents.length > 0) {
+          let depsChanged = false;
+          const updatedDeps = client.dependents.map((dep: any) => {
+            const calculatedDepWeekly = Math.max(0, depWeeklyMap[dep.id] ?? 0);
+            if ((dep.weeklyPoints ?? 0) !== calculatedDepWeekly) {
+              depsChanged = true;
+              return { ...dep, weeklyPoints: calculatedDepWeekly };
+            }
+            return dep;
+          });
+          if (depsChanged) {
+            updatePayload.dependents = updatedDeps;
+            needsUpdate = true;
+          }
+        }
 
         // 3. Pontuação semanal calculada estritamente com base na semana corrente (>= weekStartMs)
         // Se o cliente não possui pontos registrados na semana corrente, sua pontuação semanal legítima é 0.
@@ -583,24 +613,34 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
     let calculatedWeekly = 0;
     const clientTxs = transactionsByClient[client.id] || [];
     const clientBookings = completedBookingsByClient[client.id] || [];
+    const depWeeklyMap: Record<string, number> = {};
 
     // Transações da semana
     for (const tx of clientTxs) {
       const txTime = parseDateToMs(tx.createdAt) || parseDateToMs(tx.date);
       if (txTime >= targetStartMs) {
         const pts = Number(tx.points || 0);
+        const isDepTx = !!tx.dependentId;
+        let change = 0;
+
         if (typeof tx.weeklyPointsChange === 'number') {
-          calculatedWeekly += tx.weeklyPointsChange;
+          change = tx.weeklyPointsChange;
         } else if (tx.scope === 'weekly_only') {
-          calculatedWeekly += pts;
+          change = pts;
         } else if (tx.scope === 'balance_only' || tx.scope === 'seasonal_only') {
-          // não conta no semanal
+          change = 0;
         } else if (tx.type === 'earned' || tx.type === 'manual_add' || tx.type === 'bonus' || pts > 0) {
-          calculatedWeekly += Math.max(0, pts);
+          change = Math.max(0, pts);
         } else if (tx.type === 'manual_remove' || tx.type === 'adjusted' || tx.type === 'reverted' || pts < 0) {
-          if (tx.type !== 'redeem') calculatedWeekly += pts;
+          if (tx.type !== 'redeem') change = pts;
         } else if (tx.type === 'correction' && typeof tx.weeklyPointsChange === 'number') {
-          calculatedWeekly += tx.weeklyPointsChange;
+          change = tx.weeklyPointsChange;
+        }
+
+        if (isDepTx) {
+          depWeeklyMap[tx.dependentId!] = (depWeeklyMap[tx.dependentId!] || 0) + change;
+        } else {
+          calculatedWeekly += change;
         }
       }
     }
@@ -610,23 +650,46 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
       if (!existingTxBookingIds.has(b.id)) {
         const bTime = parseDateToMs(b.paidAt) || parseDateToMs(b.estimatedEndTime) || parseDateToMs(b.updatedAt) || parseDateToMs(b.createdAt);
         if (bTime >= targetStartMs) {
-          calculatedWeekly += Math.max(0, b.pointsAwarded || 0);
+          const bPts = Math.max(0, b.pointsAwarded || 0);
+          const depId = b.awardedToDependentId || b.dependentId;
+          if (depId) {
+            depWeeklyMap[depId] = (depWeeklyMap[depId] || 0) + bPts;
+          } else {
+            calculatedWeekly += bPts;
+          }
         }
       }
     }
 
     calculatedWeekly = Math.max(0, calculatedWeekly);
 
+    let updatedDependents = client.dependents;
+    let dependentsNeedUpdate = false;
+    if (Array.isArray(client.dependents) && client.dependents.length > 0) {
+      updatedDependents = client.dependents.map((dep: any) => {
+        const calculatedDepWeekly = Math.max(0, depWeeklyMap[dep.id] ?? 0);
+        if ((dep.weeklyPoints ?? 0) !== calculatedDepWeekly) {
+          dependentsNeedUpdate = true;
+          return { ...dep, weeklyPoints: calculatedDepWeekly };
+        }
+        return dep;
+      });
+    }
+
     const finalWeekly = calculatedWeekly;
     const currentWeeklyInDb = Number(client.weeklyPoints || 0);
-    const needsDbUpdate = currentWeeklyInDb !== finalWeekly;
+    const needsDbUpdate = currentWeeklyInDb !== finalWeekly || dependentsNeedUpdate;
 
     if (needsDbUpdate) {
       try {
-        await updateDoc(doc(db, 'clients', client.id), {
+        const payload: Record<string, any> = {
           weeklyPoints: finalWeekly,
           lastPointsUpdate: client.lastPointsUpdate || nowIso
-        });
+        };
+        if (dependentsNeedUpdate) {
+          payload.dependents = updatedDependents;
+        }
+        await updateDoc(doc(db, 'clients', client.id), payload);
         updatedCount++;
         totalPointsRestored += finalWeekly;
       } catch (upErr: any) {
@@ -639,7 +702,8 @@ export async function recalculateAndRestoreWeeklyRanking(options?: {
 
     updatedClients.push({
       ...client,
-      weeklyPoints: finalWeekly
+      weeklyPoints: finalWeekly,
+      dependents: updatedDependents
     });
   }
 
