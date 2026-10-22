@@ -324,12 +324,13 @@ export async function checkAndSyncClientRankBonuses(
     };
 
     const currentPts = freshData.points ?? 0;
+    const currentSeasonal = freshData.seasonalPoints ?? 0;
     if (pointsToAdd > 0) {
       updatePayload.points = increment(pointsToAdd);
       updatePayload.seasonalPoints = increment(pointsToAdd);
       updatePayload.weeklyPoints = increment(pointsToAdd);
-      updatePayload.seasonHighestPoints = Math.max(freshData.seasonHighestPoints ?? 0, currentPts + pointsToAdd);
-      updatePayload.highestSeasonalPoints = Math.max(freshData.highestSeasonalPoints ?? 0, currentPts + pointsToAdd);
+      updatePayload.seasonHighestPoints = Math.max(freshData.seasonHighestPoints ?? 0, currentSeasonal + pointsToAdd);
+      updatePayload.highestSeasonalPoints = Math.max(freshData.highestSeasonalPoints ?? 0, currentSeasonal + pointsToAdd);
     }
 
     await updateDoc(doc(db, 'clients', clientId), updatePayload);

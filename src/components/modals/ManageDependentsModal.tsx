@@ -148,11 +148,17 @@ export function ManageDependentsModal({
     }
   };
 
-  const handleDeleteDependent = async (dep: ClientDependent) => {
-    if (!confirm(`Tem certeza que deseja remover o dependente ${dep.name}?`)) {
-      return;
-    }
+  const [deletingDepId, setDeletingDepId] = useState<string | null>(null);
 
+  const handleDeleteClick = (dep: ClientDependent) => {
+    setDeletingDepId(dep.id);
+  };
+
+  const handleCancelDelete = () => {
+    setDeletingDepId(null);
+  };
+
+  const handleConfirmDelete = async (dep: ClientDependent) => {
     setSaving(true);
     try {
       const updatedDependents = dependents.filter(d => d.id !== dep.id);
@@ -171,7 +177,8 @@ export function ManageDependentsModal({
         onClientUpdated(updatedProfile);
       }
 
-      toast.success(`Dependente ${dep.name} removido.`);
+      setDeletingDepId(null);
+      toast.success(`Dependente ${dep.name} removido com sucesso.`);
     } catch (err) {
       console.error('Error deleting dependent:', err);
       toast.error('Erro ao remover dependente.');
@@ -424,11 +431,45 @@ export function ManageDependentsModal({
                       <button
                         type="button"
                         disabled={saving}
-                        onClick={() => handleDeleteDependent(dep)}
-                        className="p-1.5 text-red-400/60 hover:text-red-400 bg-red-500/5 hover:bg-red-500/15 border border-red-500/10 rounded-lg transition-colors"
+                        onClick={() => handleDeleteClick(dep)}
+                        className={`p-1.5 rounded-lg border transition-colors ${
+                          deletingDepId === dep.id
+                            ? 'text-red-400 bg-red-500/20 border-red-500/40 ring-1 ring-red-500/50'
+                            : 'text-red-400/60 hover:text-red-400 bg-red-500/5 hover:bg-red-500/15 border-red-500/10'
+                        }`}
                         title="Remover dependente"
                       >
                         <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline Deletion Confirmation Panel */}
+                {deletingDepId === dep.id && (
+                  <div className="p-3 rounded-lg bg-red-950/40 border border-red-500/40 mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                      <span className="text-xs text-red-200">
+                        Confirmar exclusão definitiva do dependente <strong>{dep.name}</strong>?
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 justify-end">
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={handleCancelDelete}
+                        className="px-2.5 py-1 text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 rounded border border-white/10 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => handleConfirmDelete(dep)}
+                        className="px-3 py-1 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded transition-colors shadow-sm"
+                      >
+                        {saving ? 'Excluindo...' : 'Confirmar Exclusão'}
                       </button>
                     </div>
                   </div>

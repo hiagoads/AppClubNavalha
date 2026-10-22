@@ -365,19 +365,33 @@ export async function reconcileAllClientsPointsAndTiers(options?: {
           result.rankingsFixedCount++;
         }
 
-        // B) Cálculo da Patente correta e pontos de pico
-        const currentActiveMax = Math.max(0, client.seasonalPoints ?? 0, client.points ?? 0);
+        // B) Cálculo da Patente correta e pontos de pico da temporada
+        // Regra estrita do sistema: a patente é calculada EXCLUSIVAMENTE com base nos pontos da temporada (seasonalPoints)
+        // e nos pontos de pico da temporada (seasonHighestPoints).
+        // O saldo gastável (points) NUNCA interfere na patente, permitindo conceder saldo para resgates sem subir a patente indevidamente!
+        const currentSeasonal = Math.max(0, client.seasonalPoints ?? 0);
         let peakPoints = Math.max(
           0,
           client.seasonHighestPoints ?? 0,
           client.highestSeasonalPoints ?? 0,
-          client.seasonalPoints ?? 0,
-          client.points ?? 0
+          currentSeasonal
         );
 
-        // Se o cliente teve os pontos e temporada zerados por correção ou estorno,
+        // Auto-reparação: Se seasonHighestPoints foi contaminado pelo saldo gastável (points) de versões anteriores
+        if (
+          !client.manualTierOverride &&
+          currentSeasonal < peakPoints &&
+          ((client.seasonHighestPoints ?? 0) === (client.points ?? 0) || (client.highestSeasonalPoints ?? 0) === (client.points ?? 0))
+        ) {
+          peakPoints = currentSeasonal;
+          updatePayload.seasonHighestPoints = currentSeasonal;
+          updatePayload.highestSeasonalPoints = currentSeasonal;
+          needsUpdate = true;
+        }
+
+        // Se o cliente teve os pontos da temporada zerados por correção ou estorno,
         // zera também resíduos fantasmas de pico para que a patente volte corretamente para Iniciante (Nv. 1)
-        if (currentActiveMax === 0 && (client.seasonHighestPoints ?? 0) > 0 && !client.manualTierOverride) {
+        if (currentSeasonal === 0 && (client.seasonHighestPoints ?? 0) > 0 && !client.manualTierOverride) {
           peakPoints = 0;
           updatePayload.seasonHighestPoints = 0;
           updatePayload.highestSeasonalPoints = 0;

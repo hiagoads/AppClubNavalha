@@ -296,7 +296,7 @@ export function ClientPointsAuditModal({
       let newSeasonal = currentSeasonal;
       let newWeekly = currentWeekly;
       let newLifetime = currentLifetime;
-      let seasonHighest = Math.max(data.seasonHighestPoints ?? 0, data.highestSeasonalPoints ?? 0, currentSeasonal, currentPts);
+      let seasonHighest = Math.max(data.seasonHighestPoints ?? 0, data.highestSeasonalPoints ?? 0, currentSeasonal);
       let highestTier = data.seasonHighestTierLevel ?? data.highestTierLevel ?? 1;
 
       const isReversionAll = adjScope === 'all_balances';
@@ -306,12 +306,11 @@ export function ClientPointsAuditModal({
         newPts = Math.max(0, parseInt(customDirectPts) || 0);
         newSeasonal = Math.max(0, parseInt(customDirectSeasonal) || 0);
         newWeekly = Math.max(0, parseInt(customDirectWeekly) || 0);
-        newLifetime = Math.max(currentLifetime, newSeasonal, newPts);
-        seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
+        newLifetime = Math.max(currentLifetime, newSeasonal);
+        // Ajuste direto define com precisão o novo pico da temporada
+        seasonHighest = newSeasonal;
         const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
-        highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
-          ? data.manualTierLevel
-          : tierInfo.tierLevel;
+        highestTier = tierInfo.tierLevel;
       } else {
         const pts = parseInt(adjPoints);
         if (adjScope === 'weekly_only') {
@@ -325,13 +324,19 @@ export function ClientPointsAuditModal({
             newSeasonal = currentSeasonal + pts;
             newLifetime = Math.max(currentLifetime, newSeasonal);
             seasonHighest = Math.max(seasonHighest, newSeasonal);
+            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+              ? data.manualTierLevel
+              : tierInfo.tierLevel;
           } else {
             newSeasonal = Math.max(0, currentSeasonal - pts);
+            // Em dedução de temporada (correção de erro), redefine o pico para newSeasonal
+            seasonHighest = newSeasonal;
+            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+              ? data.manualTierLevel
+              : tierInfo.tierLevel;
           }
-          const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
-          highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
-            ? data.manualTierLevel
-            : tierInfo.tierLevel;
         } else if (adjScope === 'balance_only') {
           if (adjAction === 'add') {
             newPts = currentPts + pts;
@@ -344,17 +349,23 @@ export function ClientPointsAuditModal({
             newSeasonal = currentSeasonal + pts;
             newWeekly = currentWeekly + pts;
             newLifetime = currentLifetime + pts;
-            seasonHighest = Math.max(seasonHighest, newSeasonal, newPts);
+            seasonHighest = Math.max(seasonHighest, newSeasonal);
+            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+              ? data.manualTierLevel
+              : tierInfo.tierLevel;
           } else {
             newPts = Math.max(0, currentPts - pts);
             newSeasonal = Math.max(0, currentSeasonal - pts);
             newWeekly = Math.max(0, currentWeekly - pts);
             newLifetime = Math.max(0, currentLifetime - pts);
+            // Reversão Geral de Erro: reseta seasonHighest para newSeasonal permitindo descida de patente
+            seasonHighest = newSeasonal;
+            const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
+            highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
+              ? data.manualTierLevel
+              : tierInfo.tierLevel;
           }
-          const tierInfo = getLevelTier(seasonHighest, thresholds, 1);
-          highestTier = (data.manualTierOverride && typeof data.manualTierLevel === 'number')
-            ? data.manualTierLevel
-            : tierInfo.tierLevel;
         }
       }
 
@@ -376,38 +387,51 @@ export function ClientPointsAuditModal({
 
       const nowIso = new Date().toISOString();
 
-      const updateData: any = {
-        points: newPts,
-        seasonalPoints: newSeasonal,
-        seasonHighestPoints: seasonHighest,
-        highestSeasonalPoints: seasonHighest,
-        seasonHighestTierLevel: highestTier,
-        highestTierLevel: highestTier,
-        level: highestTier,
-        weeklyPoints: newWeekly,
-        lifetimePoints: newLifetime,
-        lastPointsUpdate: nowIso
-      };
+      let updateData: any;
+      if (adjScope === 'balance_only') {
+        updateData = {
+          points: newPts,
+          lastPointsUpdate: nowIso
+        };
+      } else if (adjScope === 'weekly_only') {
+        updateData = {
+          weeklyPoints: newWeekly,
+          lastPointsUpdate: nowIso
+        };
+      } else {
+        updateData = {
+          points: newPts,
+          seasonalPoints: newSeasonal,
+          seasonHighestPoints: seasonHighest,
+          highestSeasonalPoints: seasonHighest,
+          seasonHighestTierLevel: highestTier,
+          highestTierLevel: highestTier,
+          level: highestTier,
+          weeklyPoints: newWeekly,
+          lifetimePoints: newLifetime,
+          lastPointsUpdate: nowIso
+        };
 
-      if (isReversionAll || isCustomDirect) {
-        updateData.manualTierOverride = false;
-        updateData.manualTierLevel = highestTier;
+        if (isReversionAll || isCustomDirect || (adjScope === 'seasonal_only' && adjAction === 'remove')) {
+          updateData.manualTierOverride = false;
+          updateData.manualTierLevel = highestTier;
 
-        // Limpeza de bônus indevidos de patentes superiores que o cliente não atinge mais
-        let clientBonuses: any[] = Array.isArray(data.bonuses) ? [...data.bonuses] : [];
-        clientBonuses = clientBonuses.filter((b: any) => {
-          if (b.category === 'rank_level' && !b.isRedeemed) {
-            const def = DEFAULT_RANK_BONUSES.find(cfg => 
-              cfg.rankKey === b.rankKey || 
-              cfg.title?.trim().toLowerCase() === b.title?.trim().toLowerCase()
-            );
-            if (def && def.level > highestTier) {
-              return false; // Remove bônus de patente indevida
+          // Limpeza de bônus indevidos de patentes superiores que o cliente não atinge mais
+          let clientBonuses: any[] = Array.isArray(data.bonuses) ? [...data.bonuses] : [];
+          clientBonuses = clientBonuses.filter((b: any) => {
+            if (b.category === 'rank_level' && !b.isRedeemed) {
+              const def = DEFAULT_RANK_BONUSES.find(cfg => 
+                cfg.rankKey === b.rankKey || 
+                cfg.title?.trim().toLowerCase() === b.title?.trim().toLowerCase()
+              );
+              if (def && def.level > highestTier) {
+                return false; // Remove bônus de patente indevida
+              }
             }
-          }
-          return true;
-        });
-        updateData.bonuses = clientBonuses;
+            return true;
+          });
+          updateData.bonuses = clientBonuses;
+        }
       }
 
       await updateDoc(clientRef, updateData);
@@ -526,12 +550,13 @@ export function ClientPointsAuditModal({
       const previousTierName = getTierName(previousTierLevel);
 
       const targetThreshold = thresholds[selectedTierLevel - 1] || 0;
-      const effectivePts = Math.min(data.points ?? 0, targetThreshold);
       const effectiveSeasonal = Math.min(data.seasonalPoints ?? 0, targetThreshold);
 
       // Atualiza diretamente no Firestore sobrescrevendo as travas de pico de patente
-      // e ajustando os pontos de pico para não forçar a subida de volta caso o cliente esteja acima
+      // e ajustando os pontos de pico da temporada para condizer com a patente escolhida.
+      // O saldo gastável (points) é rigorosamente preservado intacto!
       const updatePayload: any = {
+        level: selectedTierLevel,
         seasonHighestTierLevel: selectedTierLevel,
         highestTierLevel: selectedTierLevel,
         manualTierLevel: selectedTierLevel,
@@ -540,11 +565,6 @@ export function ClientPointsAuditModal({
         highestSeasonalPoints: effectiveSeasonal,
         seasonalPoints: effectiveSeasonal
       };
-
-      // Se o cliente foi rebaixado para um nível abaixo dos pontos atuais, ajusta os pontos para condizer
-      if ((data.points ?? 0) > targetThreshold) {
-        updatePayload.points = targetThreshold;
-      }
 
       await updateDoc(clientRef, updatePayload);
 
