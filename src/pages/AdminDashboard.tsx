@@ -503,8 +503,7 @@ export default function AdminDashboard() {
           const newSeasonHighest = Math.max(
             clientData.seasonHighestPoints ?? 0,
             clientData.highestSeasonalPoints ?? 0,
-            newSeasonal,
-            (clientData.points || 0) + pointsToGive
+            newSeasonal
           );
 
           const updatedTier = getClientTier({ 
@@ -578,8 +577,7 @@ export default function AdminDashboard() {
           const newSeasonHighest = Math.max(
             clientData.seasonHighestPoints ?? 0,
             clientData.highestSeasonalPoints ?? 0,
-            newSeasonal,
-            (clientData.points || 0) + pointsToGive
+            newSeasonal
           );
 
           const updatedTier = getClientTier({ 

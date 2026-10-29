@@ -1,6 +1,6 @@
 {
-  "summary":  "Plano de implementação completo para o Sistema de Dependentes (Filhos/Família), estruturado com base nas respostas do usuário: cadastro e gestão de dependentes exclusivo no painel admin, seleção de dependente no agendamento pelo pai, e opção para o barbeiro/admin definir o destino dos pontos (pai ou filho) ao concluir o corte.",
-  "updatedAt":  "2026-10-21T20:06:52.378375418Z",
+  "summary":  "Plano de implementação concluído com sucesso. Todos os itens de cancelamento, devolução para a fila, estorno de pontos/XP/patente/ranking semanal e revogação de prêmios não resgatados foram implementados e validados na compilação.",
+  "updatedAt":  "2026-10-29T02:30:32.904572067Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

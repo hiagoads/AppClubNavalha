@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter, ArrowUpDown, BadgeCheck } from 'lucide-react';
+import { DollarSign, TrendingUp, Scissors, Calendar, Users, X, Clock, Info, Trash2, Edit2, Save, XCircle, Check, Search, Filter, ArrowUpDown, BadgeCheck, RotateCcw, Ban, AlertTriangle, Loader2, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useServices } from '../hooks/useServices';
 import { useBarbers } from '../hooks/useBarbers';
@@ -58,6 +58,9 @@ export default function BillingView() {
 
   const [selectedClient, setSelectedClient] = useState<Booking | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmReturnQueueId, setConfirmReturnQueueId] = useState<string | null>(null);
+  const [confirmCancelBookingId, setConfirmCancelBookingId] = useState<string | null>(null);
+  const [isProcessingBookingAction, setIsProcessingBookingAction] = useState(false);
 
   const [isEditingRecord, setIsEditingRecord] = useState(false);
   const [editData, setEditData] = useState<{ clientName: string, serviceId: string, priceOverride: string, isPaid: boolean, barberId: string }>({ clientName: '', serviceId: '', priceOverride: '', isPaid: true, barberId: '' });
@@ -1131,19 +1134,147 @@ export default function BillingView() {
             )}
             
             {!isEditingRecord && (
-              <div className="mt-8 flex flex-col gap-3">
+              <div className="mt-6 flex flex-col gap-3">
+                {/* Banner Informativo de Estorno */}
+                {(selectedClient.pointsAwarded || selectedClient.clientId || (selectedClient as any).awardedClientId) && (
+                  <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-amber-400">Reversão Automática de Gamificação</p>
+                      <p className="text-white/70 mt-0.5">
+                        Ao cancelar ou devolver para a fila, os pontos XP, ranking semanal, patente e bônus de rank deste atendimento serão subtraídos do cliente.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Opção 1: Devolver para a Fila */}
+                <button
+                  disabled={isProcessingBookingAction}
+                  onClick={async () => {
+                    if (confirmReturnQueueId === selectedClient.id) {
+                      setIsProcessingBookingAction(true);
+                      try {
+                        const revertResult = await revertCompletedBookingGamification(
+                          selectedClient,
+                          'Atendimento devolvido para a fila via Faturamento',
+                          tierThresholds,
+                          'return_to_queue'
+                        );
+
+                        if (revertResult.reverted) {
+                          toast.success(
+                            `Cliente devolvido para a fila! ${revertResult.pointsDeducted ? `(-${revertResult.pointsDeducted} pts estornados)` : ''}`
+                          );
+                          if (revertResult.newTier && revertResult.previousTier && revertResult.newTier !== revertResult.previousTier) {
+                            toast(`Patente atualizada: ${revertResult.previousTier} ➔ ${revertResult.newTier}`, { icon: '📉' });
+                          }
+                          if (revertResult.revokedBonuses && revertResult.revokedBonuses.length > 0) {
+                            toast(`Prêmios de patente pendentes revogados: ${revertResult.revokedBonuses.join(', ')}`, { icon: '⚠️' });
+                          }
+                        } else {
+                          toast.success('Cliente devolvido para a fila com sucesso!');
+                        }
+
+                        setSelectedClient(null);
+                        setConfirmReturnQueueId(null);
+                      } catch (error) {
+                        console.error('Erro ao devolver cliente para a fila:', error);
+                        toast.error('Erro ao devolver cliente para a fila');
+                      } finally {
+                        setIsProcessingBookingAction(false);
+                      }
+                    } else {
+                      setConfirmReturnQueueId(selectedClient.id);
+                      setConfirmCancelBookingId(null);
+                      setConfirmDeleteId(null);
+                      setTimeout(() => setConfirmReturnQueueId(null), 4000);
+                    }
+                  }}
+                  className={`w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 ${
+                    confirmReturnQueueId === selectedClient.id 
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-600/30' 
+                      : 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                  }`}
+                >
+                  {isProcessingBookingAction ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4" />
+                  )}
+                  {confirmReturnQueueId === selectedClient.id ? 'Confirmar: Devolver para a Fila' : 'Devolver para a Fila'}
+                </button>
+
+                {/* Opção 2: Cancelar Atendimento */}
+                <button
+                  disabled={isProcessingBookingAction}
+                  onClick={async () => {
+                    if (confirmCancelBookingId === selectedClient.id) {
+                      setIsProcessingBookingAction(true);
+                      try {
+                        const revertResult = await revertCompletedBookingGamification(
+                          selectedClient,
+                          'Atendimento cancelado via Faturamento',
+                          tierThresholds,
+                          'cancel'
+                        );
+
+                        if (revertResult.reverted) {
+                          toast.success(
+                            `Atendimento cancelado! ${revertResult.pointsDeducted ? `-${revertResult.pointsDeducted} pts estornados de ${revertResult.clientName || 'cliente'}.` : ''}`
+                          );
+                          if (revertResult.newTier && revertResult.previousTier && revertResult.newTier !== revertResult.previousTier) {
+                            toast(`Patente atualizada: ${revertResult.previousTier} ➔ ${revertResult.newTier}`, { icon: '📉' });
+                          }
+                          if (revertResult.revokedBonuses && revertResult.revokedBonuses.length > 0) {
+                            toast(`Prêmios de patente pendentes revogados: ${revertResult.revokedBonuses.join(', ')}`, { icon: '⚠️' });
+                          }
+                        } else {
+                          toast.success('Atendimento cancelado com sucesso!');
+                        }
+
+                        setSelectedClient(null);
+                        setConfirmCancelBookingId(null);
+                      } catch (error) {
+                        console.error('Erro ao cancelar atendimento:', error);
+                        toast.error('Erro ao cancelar atendimento');
+                      } finally {
+                        setIsProcessingBookingAction(false);
+                      }
+                    } else {
+                      setConfirmCancelBookingId(selectedClient.id);
+                      setConfirmReturnQueueId(null);
+                      setConfirmDeleteId(null);
+                      setTimeout(() => setConfirmCancelBookingId(null), 4000);
+                    }
+                  }}
+                  className={`w-full font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 ${
+                    confirmCancelBookingId === selectedClient.id 
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-lg shadow-amber-600/30' 
+                      : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  }`}
+                >
+                  {isProcessingBookingAction ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Ban className="w-4 h-4" />
+                  )}
+                  {confirmCancelBookingId === selectedClient.id ? 'Confirmar: Cancelar Atendimento' : 'Cancelar Atendimento'}
+                </button>
+
+                {/* Opção 3: Excluir Registro */}
                 <button 
+                  disabled={isProcessingBookingAction}
                   onClick={async () => {
                     if (confirmDeleteId === selectedClient.id) {
+                      setIsProcessingBookingAction(true);
                       try {
-                        // Reverte pontos, XP, nível, patente e bônus associados ao serviço
                         const revertResult = await revertCompletedBookingGamification(
                           selectedClient,
                           'Registro de serviço excluído no Faturamento',
-                          tierThresholds
+                          tierThresholds,
+                          'delete'
                         );
-
-                        await deleteDoc(doc(db, 'bookings', selectedClient.id));
 
                         if (revertResult.reverted && revertResult.pointsDeducted) {
                           toast.success(`Registro excluído! ${revertResult.pointsDeducted} pontos estornados de ${revertResult.clientName || 'cliente'}.`);
@@ -1155,23 +1286,36 @@ export default function BillingView() {
                       } catch (error) {
                         console.error('Erro ao excluir registro:', error);
                         toast.error('Erro ao excluir registro');
+                      } finally {
+                        setIsProcessingBookingAction(false);
                       }
                     } else {
                       setConfirmDeleteId(selectedClient.id);
+                      setConfirmReturnQueueId(null);
+                      setConfirmCancelBookingId(null);
                       setTimeout(() => setConfirmDeleteId(null), 3000);
                     }
                   }}
-                  className={`w-full ${confirmDeleteId === selectedClient.id ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30'} font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2`}
+                  className={`w-full ${confirmDeleteId === selectedClient.id ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30'} font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50`}
                 >
-                  <Trash2 className="w-5 h-5" />
-                  {confirmDeleteId === selectedClient.id ? 'Confirmar Exclusão' : 'Excluir Registro'}
+                  {isProcessingBookingAction ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  {confirmDeleteId === selectedClient.id ? 'Confirmar Exclusão Definitiva' : 'Excluir Registro'}
                 </button>
+
+                {/* Fechar */}
                 <button 
+                  disabled={isProcessingBookingAction}
                   onClick={() => {
                     setSelectedClient(null);
                     setConfirmDeleteId(null);
+                    setConfirmReturnQueueId(null);
+                    setConfirmCancelBookingId(null);
                   }} 
-                  className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3 rounded-xl transition-all"
+                  className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3 rounded-xl transition-all text-sm mt-1"
                 >
                   Fechar
                 </button>

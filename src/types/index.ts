@@ -41,6 +41,8 @@ export interface Service {
   isActive: boolean;
   imageUrl?: string;
   isProduct?: boolean;
+  order?: number;
+  createdAt?: string;
 }
 
 export interface Booking {
